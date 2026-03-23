@@ -1,3 +1,4 @@
+use crate::authentication::registry_based::RegistryBasedAuthenticator;
 use crate::connection_limiter::ConnectionLimiter;
 use crate::direct_forwarder::DirectForwarder;
 use crate::forwarder::Forwarder;
@@ -69,9 +70,14 @@ impl FatalIoError {
     }
 }
 
+pub(crate) struct CredentialsState {
+    pub authenticator: Option<Arc<dyn authentication::Authenticator>>,
+    pub connection_limiter: Option<Arc<ConnectionLimiter>>,
+}
+
 pub(crate) struct Context {
     pub settings: Arc<Settings>,
-    pub authenticator: Option<Arc<dyn authentication::Authenticator>>,
+    pub credentials: RwLock<CredentialsState>,
     tls_demux: Arc<RwLock<TlsDemux>>,
     pub icmp_forwarder: Option<Arc<IcmpForwarder>>,
     pub shutdown: Arc<Mutex<Shutdown>>,
@@ -82,7 +88,6 @@ pub(crate) struct Context {
     pub metrics: Arc<Metrics>,
     next_client_id: Arc<AtomicU64>,
     next_tunnel_id: Arc<AtomicU64>,
-    pub connection_limiter: Option<Arc<ConnectionLimiter>>,
 }
 
 impl Context {
@@ -121,12 +126,12 @@ impl Core {
         let connection_limiter = if settings.default_max_http2_conns_per_client.is_some()
             || settings.default_max_http3_conns_per_client.is_some()
             || settings
-                .clients
+                .get_clients()
                 .iter()
                 .any(|c| c.max_http2_conns.is_some() || c.max_http3_conns.is_some())
         {
             Some(Arc::new(ConnectionLimiter::new(
-                &settings.clients,
+                settings.get_clients(),
                 settings.default_max_http2_conns_per_client,
                 settings.default_max_http3_conns_per_client,
             )))
@@ -137,7 +142,10 @@ impl Core {
         Ok(Self {
             context: Arc::new(Context {
                 settings: settings.clone(),
-                authenticator,
+                credentials: RwLock::new(CredentialsState {
+                    authenticator,
+                    connection_limiter,
+                }),
                 tls_demux: Arc::new(RwLock::new(
                     TlsDemux::new(&settings, &tls_hosts_settings)
                         .map_err(|e| Error::TlsDemultiplexer(e.to_string()))?,
@@ -152,7 +160,6 @@ impl Core {
                 metrics: Metrics::new().map_err(|e| Error::Metrics(e.to_string()))?,
                 next_client_id: Default::default(),
                 next_tunnel_id: Default::default(),
-                connection_limiter,
             }),
         })
     }
@@ -232,6 +239,57 @@ impl Core {
         }
 
         *demux = TlsDemux::new(&self.context.settings, &settings)?;
+        Ok(())
+    }
+
+    /// Reload credentials from a new client list
+    pub fn reload_credentials(
+        &self,
+        clients: &[authentication::registry_based::Client],
+        listen_address: std::net::SocketAddr,
+    ) -> io::Result<()> {
+        if clients.is_empty() && !listen_address.ip().is_loopback() {
+            return Err(io::Error::new(
+                ErrorKind::InvalidInput,
+                "Cannot reload with empty credentials on non-loopback address",
+            ));
+        }
+
+        let new_authenticator: Option<Arc<dyn authentication::Authenticator>> =
+            if !clients.is_empty() {
+                Some(Arc::new(RegistryBasedAuthenticator::new(clients)))
+            } else {
+                None
+            };
+
+        let new_limiter = if self
+            .context
+            .settings
+            .default_max_http2_conns_per_client
+            .is_some()
+            || self
+                .context
+                .settings
+                .default_max_http3_conns_per_client
+                .is_some()
+            || clients
+                .iter()
+                .any(|c| c.max_http2_conns.is_some() || c.max_http3_conns.is_some())
+        {
+            Some(Arc::new(ConnectionLimiter::new(
+                clients,
+                self.context.settings.default_max_http2_conns_per_client,
+                self.context.settings.default_max_http3_conns_per_client,
+            )))
+        } else {
+            None
+        };
+
+        *self.context.credentials.write().unwrap() = CredentialsState {
+            authenticator: new_authenticator,
+            connection_limiter: new_limiter,
+        };
+
         Ok(())
     }
 
@@ -696,21 +754,27 @@ impl Core {
     ) {
         let _metrics_guard = Metrics::client_sessions_counter(context.metrics.clone(), protocol);
 
-        let (authentication_policy, sni_connection_guard) =
-            match context.authenticator.as_ref().zip(sni_auth_creds) {
+        let (authentication_policy, sni_connection_guard) = {
+            let creds_state = context.credentials.read().unwrap();
+            match creds_state
+                .authenticator
+                .as_ref()
+                .zip(sni_auth_creds.as_ref())
+            {
                 None => (tunnel::AuthenticationPolicy::Default, None),
                 Some((authenticator, credentials)) => {
-                    let auth = authentication::Source::Sni(credentials.into());
+                    let auth = authentication::Source::Sni(credentials.to_string().into());
                     match authenticator.authenticate(&auth, &tunnel_id) {
                         authentication::Status::Pass => {
-                            let guard = context.connection_limiter.as_ref().and_then(|limiter| {
-                                let creds = match &auth {
-                                    authentication::Source::Sni(s) => s.as_ref(),
-                                    authentication::Source::ProxyBasic(s) => s.as_ref(),
-                                };
-                                limiter.try_acquire(creds, protocol)
-                            });
-                            if context.connection_limiter.is_some() && guard.is_none() {
+                            let guard =
+                                creds_state.connection_limiter.as_ref().and_then(|limiter| {
+                                    let creds = match &auth {
+                                        authentication::Source::Sni(s) => s.as_ref(),
+                                        authentication::Source::ProxyBasic(s) => s.as_ref(),
+                                    };
+                                    limiter.try_acquire(creds, protocol)
+                                });
+                            if creds_state.connection_limiter.is_some() && guard.is_none() {
                                 log_id!(
                                     debug,
                                     tunnel_id,
@@ -726,7 +790,8 @@ impl Core {
                         }
                     }
                 }
-            };
+            }
+        };
 
         log_id!(debug, tunnel_id, "New tunnel for client");
         let mut tunnel = Tunnel::new(
@@ -780,7 +845,10 @@ impl Default for Context {
         let (fatal_error, _fatal_error_rx) = watch::channel(None);
         Self {
             settings: settings.clone(),
-            authenticator: None,
+            credentials: RwLock::new(CredentialsState {
+                authenticator: None,
+                connection_limiter: None,
+            }),
             tls_demux: Arc::new(RwLock::new(
                 TlsDemux::new(&settings, &settings::TlsHostsSettings::default()).unwrap(),
             )),
@@ -790,7 +858,297 @@ impl Default for Context {
             metrics: Metrics::new().unwrap(),
             next_client_id: Default::default(),
             next_tunnel_id: Default::default(),
-            connection_limiter: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::authentication::registry_based::Client;
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
+    #[test]
+    fn test_reload_credentials_success() {
+        let core = Core {
+            context: Arc::new(Context::default()),
+        };
+
+        let clients = vec![
+            Client {
+                username: "user1".to_string(),
+                password: "pass1".to_string(),
+                max_http2_conns: None,
+                max_http3_conns: None,
+            },
+            Client {
+                username: "user2".to_string(),
+                password: "pass2".to_string(),
+                max_http2_conns: Some(10),
+                max_http3_conns: Some(20),
+            },
+        ];
+
+        let listen_address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8080);
+
+        let result = core.reload_credentials(&clients, listen_address);
+        assert!(result.is_ok());
+
+        let creds = core.context.credentials.read().unwrap();
+        assert!(creds.authenticator.is_some());
+    }
+
+    #[test]
+    fn test_reload_credentials_empty_on_loopback() {
+        let core = Core {
+            context: Arc::new(Context::default()),
+        };
+
+        let clients = vec![];
+        let listen_address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8080);
+
+        let result = core.reload_credentials(&clients, listen_address);
+        assert!(result.is_ok());
+
+        let creds = core.context.credentials.read().unwrap();
+        assert!(creds.authenticator.is_none());
+    }
+
+    #[test]
+    fn test_reload_credentials_empty_on_public_address_fails() {
+        let core = Core {
+            context: Arc::new(Context::default()),
+        };
+
+        let clients = vec![];
+        let listen_address = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(1, 2, 3, 4)), 8080);
+
+        let result = core.reload_credentials(&clients, listen_address);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().kind(), ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn test_reload_credentials_updates_connection_limiter() {
+        let mut settings = Settings::default();
+        settings.default_max_http2_conns_per_client = Some(5);
+        settings.default_max_http3_conns_per_client = Some(10);
+
+        let core = Core {
+            context: Arc::new(Context {
+                settings: Arc::new(settings),
+                ..Context::default()
+            }),
+        };
+
+        let clients = vec![Client {
+            username: "user1".to_string(),
+            password: "pass1".to_string(),
+            max_http2_conns: Some(15),
+            max_http3_conns: Some(25),
+        }];
+
+        let listen_address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8080);
+
+        let result = core.reload_credentials(&clients, listen_address);
+        assert!(result.is_ok());
+
+        let creds = core.context.credentials.read().unwrap();
+        assert!(creds.connection_limiter.is_some());
+    }
+
+    #[test]
+    fn test_reload_credentials_replaces_existing() {
+        let core = Core {
+            context: Arc::new(Context::default()),
+        };
+
+        let initial_clients = vec![Client {
+            username: "old_user".to_string(),
+            password: "old_pass".to_string(),
+            max_http2_conns: None,
+            max_http3_conns: None,
+        }];
+
+        let listen_address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8080);
+
+        core.reload_credentials(&initial_clients, listen_address)
+            .unwrap();
+
+        let new_clients = vec![Client {
+            username: "new_user".to_string(),
+            password: "new_pass".to_string(),
+            max_http2_conns: None,
+            max_http3_conns: None,
+        }];
+
+        let result = core.reload_credentials(&new_clients, listen_address);
+        assert!(result.is_ok());
+
+        let creds = core.context.credentials.read().unwrap();
+        assert!(creds.authenticator.is_some());
+    }
+
+    #[test]
+    fn test_reload_credentials_authenticator_works() {
+        use crate::authentication::{Source, Status};
+        use crate::log_utils::IdChain;
+        use base64::engine::general_purpose::STANDARD as BASE64_ENGINE;
+        use base64::Engine;
+
+        let core = Core {
+            context: Arc::new(Context::default()),
+        };
+
+        let clients = vec![Client {
+            username: "testuser".to_string(),
+            password: "testpass".to_string(),
+            max_http2_conns: None,
+            max_http3_conns: None,
+        }];
+
+        let listen_address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8080);
+        core.reload_credentials(&clients, listen_address).unwrap();
+
+        let creds = core.context.credentials.read().unwrap();
+        let authenticator = creds.authenticator.as_ref().unwrap();
+
+        let valid_creds = BASE64_ENGINE.encode("testuser:testpass");
+        let invalid_creds = BASE64_ENGINE.encode("testuser:wrongpass");
+        let log_id = IdChain::<u64>::empty();
+
+        assert!(
+            authenticator.authenticate(&Source::ProxyBasic(valid_creds.into()), &log_id)
+                == Status::Pass
+        );
+        assert!(
+            authenticator.authenticate(&Source::ProxyBasic(invalid_creds.into()), &log_id)
+                == Status::Reject
+        );
+    }
+
+    #[test]
+    fn test_reload_credentials_old_creds_rejected_after_reload() {
+        use crate::authentication::{Source, Status};
+        use crate::log_utils::IdChain;
+        use base64::engine::general_purpose::STANDARD as BASE64_ENGINE;
+        use base64::Engine;
+
+        let core = Core {
+            context: Arc::new(Context::default()),
+        };
+
+        let listen_address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8080);
+
+        let old_clients = vec![Client {
+            username: "olduser".to_string(),
+            password: "oldpass".to_string(),
+            max_http2_conns: None,
+            max_http3_conns: None,
+        }];
+        core.reload_credentials(&old_clients, listen_address)
+            .unwrap();
+
+        let old_creds = BASE64_ENGINE.encode("olduser:oldpass");
+        let log_id = IdChain::<u64>::empty();
+
+        {
+            let creds = core.context.credentials.read().unwrap();
+            let authenticator = creds.authenticator.as_ref().unwrap();
+            assert!(
+                authenticator.authenticate(&Source::ProxyBasic(old_creds.clone().into()), &log_id)
+                    == Status::Pass
+            );
+        }
+
+        let new_clients = vec![Client {
+            username: "newuser".to_string(),
+            password: "newpass".to_string(),
+            max_http2_conns: None,
+            max_http3_conns: None,
+        }];
+        core.reload_credentials(&new_clients, listen_address)
+            .unwrap();
+
+        {
+            let creds = core.context.credentials.read().unwrap();
+            let authenticator = creds.authenticator.as_ref().unwrap();
+            assert!(
+                authenticator.authenticate(&Source::ProxyBasic(old_creds.into()), &log_id)
+                    == Status::Reject
+            );
+
+            let new_creds = BASE64_ENGINE.encode("newuser:newpass");
+            assert!(
+                authenticator.authenticate(&Source::ProxyBasic(new_creds.into()), &log_id)
+                    == Status::Pass
+            );
+        }
+    }
+
+    #[test]
+    fn test_reload_credentials_concurrent_access() {
+        use crate::authentication::Source;
+        use crate::log_utils::IdChain;
+        use base64::engine::general_purpose::STANDARD as BASE64_ENGINE;
+        use base64::Engine;
+        use std::thread;
+
+        let core = Arc::new(Core {
+            context: Arc::new(Context::default()),
+        });
+
+        let listen_address = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8080);
+
+        let initial_clients = vec![Client {
+            username: "user".to_string(),
+            password: "pass".to_string(),
+            max_http2_conns: None,
+            max_http3_conns: None,
+        }];
+        core.reload_credentials(&initial_clients, listen_address)
+            .unwrap();
+
+        let mut handles = vec![];
+
+        for _ in 0..10 {
+            let core_clone = core.clone();
+            let handle = thread::spawn(move || {
+                let creds = BASE64_ENGINE.encode("user:pass");
+                let log_id = IdChain::<u64>::empty();
+
+                for _ in 0..100 {
+                    let creds_state = core_clone.context.credentials.read().unwrap();
+                    if let Some(ref authenticator) = creds_state.authenticator {
+                        let _ = authenticator
+                            .authenticate(&Source::ProxyBasic(creds.clone().into()), &log_id);
+                    }
+                }
+            });
+            handles.push(handle);
+        }
+
+        for _ in 0..5 {
+            let core_clone = core.clone();
+            let handle = thread::spawn(move || {
+                for j in 0..20 {
+                    let clients = vec![Client {
+                        username: format!("user{}", j),
+                        password: format!("pass{}", j),
+                        max_http2_conns: None,
+                        max_http3_conns: None,
+                    }];
+                    let _ = core_clone.reload_credentials(&clients, listen_address);
+                }
+            });
+            handles.push(handle);
+        }
+
+        for handle in handles {
+            handle.join().expect("Thread panicked");
+        }
+
+        let creds = core.context.credentials.read().unwrap();
+        assert!(creds.authenticator.is_some());
     }
 }

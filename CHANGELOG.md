@@ -1,5 +1,9 @@
 # CHANGELOG
 
+- [Feature] SIGHUP credential reload support
+    - Credentials can now be reloaded without restarting the endpoint via `systemctl reload` or SIGHUP
+    - Added `ExecReload` directive to systemd service template
+
 ## 1.0.17
 
 - [Fix]     Reverse proxy routing for H2/H3.

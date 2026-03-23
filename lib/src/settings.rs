@@ -13,6 +13,14 @@ use macros::{Getter, RuntimeDoc};
 use serde::{Deserialize, Serialize};
 use toml_edit::{Document, Item};
 
+/// Holds both the credentials file path and the loaded clients.
+/// Used for reload functionality.
+#[derive(Default, Clone)]
+pub struct ClientsWithPath {
+    pub path: Option<String>,
+    pub clients: Vec<Client>,
+}
+
 pub type Socks5BuilderResult<T> = Result<T, Socks5Error>;
 
 pub enum ValidationError {
@@ -159,8 +167,8 @@ pub struct Settings {
     #[serde(default)]
     #[serde(skip_serializing)]
     #[serde(rename(deserialize = "credentials_file"))]
-    #[serde(deserialize_with = "deserialize_clients")]
-    pub(crate) clients: Vec<Client>,
+    #[serde(deserialize_with = "deserialize_clients_with_path")]
+    pub(crate) credentials: ClientsWithPath,
     /// The reverse proxy settings.
     /// With this one set up the endpoint does TLS termination on such connections and
     /// translates HTTP/x traffic into HTTP/1.1 protocol towards the server and back
@@ -536,7 +544,7 @@ impl Settings {
         }
 
         // Do not start the endpoint without credentials on a public address
-        if self.clients.is_empty() && !self.listen_address.ip().is_loopback() {
+        if self.get_clients().is_empty() && !self.listen_address.ip().is_loopback() {
             return Err(ValidationError::NoCredentialsOnPublicAddress);
         }
 
@@ -601,6 +609,16 @@ impl Settings {
         407
     }
 
+    /// Returns the list of configured clients
+    pub fn get_clients(&self) -> &[Client] {
+        &self.credentials.clients
+    }
+
+    /// Returns the path to the credentials file, if configured
+    pub fn get_credentials_file_path(&self) -> Option<&str> {
+        self.credentials.path.as_deref()
+    }
+
     fn validate_request_path(name: &str, path: &Option<String>) -> Result<(), ValidationError> {
         if let Some(path) = path {
             if path.is_empty() || !path.starts_with('/') {
@@ -639,7 +657,7 @@ impl Default for Settings {
             tcp_connections_timeout: Settings::default_tcp_connections_timeout(),
             udp_connections_timeout: Settings::default_udp_connections_timeout(),
             forward_protocol: Default::default(),
-            clients: Default::default(),
+            credentials: Default::default(),
             listen_protocols: ListenProtocolSettings {
                 http1: Some(Http1Settings::builder().build()),
                 http2: Some(Http2Settings::builder().build()),
@@ -904,7 +922,7 @@ impl SettingsBuilder {
                 udp_connections_timeout: Settings::default_udp_connections_timeout(),
                 forward_protocol: Default::default(),
                 listen_protocols: Default::default(),
-                clients: Default::default(),
+                credentials: Default::default(),
                 reverse_proxy: None,
                 icmp: None,
                 metrics: Default::default(),
@@ -1009,7 +1027,7 @@ impl SettingsBuilder {
 
     /// Set the client authenticator
     pub fn clients(mut self, x: Vec<Client>) -> Self {
-        self.settings.clients = x;
+        self.settings.credentials.clients = x;
         self
     }
 
@@ -1521,36 +1539,18 @@ where
     deserializer.deserialize_str(Visitor)
 }
 
-fn deserialize_clients<'de, D>(deserializer: D) -> Result<Vec<Client>, D::Error>
-where
-    D: serde::de::Deserializer<'de>,
-{
-    let path = deserialize_file_path(deserializer)?;
+pub fn load_clients_from_file(path: &str) -> Result<Vec<Client>, String> {
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| format!("Couldn't read file: path={} error={}", path, e))?;
 
-    let content = std::fs::read_to_string(&path).map_err(|e| {
-        serde::de::Error::invalid_value(
-            serde::de::Unexpected::Other(&format!("Couldn't read file: path={} error={}", path, e)),
-            &"A readable file",
-        )
-    })?;
-
-    let clients: Document = content.parse().map_err(|e| {
-        serde::de::Error::invalid_value(
-            serde::de::Unexpected::Other(&format!(
-                "Couldn't parse file: path={} error={}",
-                path, e
-            )),
-            &"A TOML-formatted file",
-        )
-    })?;
+    let clients: Document = content
+        .parse()
+        .map_err(|e| format!("Couldn't parse file: path={} error={}", path, e))?;
 
     let res: Vec<Client> = clients
         .get("client")
         .and_then(Item::as_array_of_tables)
-        .ok_or(serde::de::Error::invalid_value(
-            serde::de::Unexpected::Other("Not an array of clients"),
-            &"An array of clients",
-        ))?
+        .ok_or_else(|| "Not an array of clients".to_string())?
         .iter()
         .enumerate()
         .map(|(idx, x)| {
@@ -1558,16 +1558,10 @@ where
             let password = demangle_toml_string(x["password"].to_string());
 
             if username.is_empty() {
-                return Err(serde::de::Error::custom(format!(
-                    "Client #{}: username cannot be empty",
-                    idx + 1
-                )));
+                return Err(format!("Client #{}: username cannot be empty", idx + 1));
             }
             if password.is_empty() {
-                return Err(serde::de::Error::custom(format!(
-                    "Client #{}: password cannot be empty",
-                    idx + 1
-                )));
+                return Err(format!("Client #{}: password cannot be empty", idx + 1));
             }
 
             let max_http2_conns = x
@@ -1589,6 +1583,18 @@ where
         .collect::<Result<Vec<_>, _>>()?;
 
     Ok(res)
+}
+
+fn deserialize_clients_with_path<'de, D>(deserializer: D) -> Result<ClientsWithPath, D::Error>
+where
+    D: serde::de::Deserializer<'de>,
+{
+    let path = deserialize_file_path(deserializer)?;
+    let clients = load_clients_from_file(&path).map_err(serde::de::Error::custom)?;
+    Ok(ClientsWithPath {
+        path: Some(path),
+        clients,
+    })
 }
 
 fn deserialize_rules<'de, D>(deserializer: D) -> Result<Option<rules::RulesEngine>, D::Error>
@@ -1673,6 +1679,108 @@ fn demangle_toml_string(x: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_load_clients_from_file_valid() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            r#"
+[[client]]
+username = "user1"
+password = "pass1"
+
+[[client]]
+username = "user2"
+password = "pass2"
+max_http2_conns = 10
+max_http3_conns = 20
+"#
+        )
+        .unwrap();
+
+        let clients = load_clients_from_file(file.path().to_str().unwrap()).unwrap();
+        assert_eq!(clients.len(), 2);
+        assert_eq!(clients[0].username, "user1");
+        assert_eq!(clients[0].password, "pass1");
+        assert_eq!(clients[0].max_http2_conns, None);
+        assert_eq!(clients[0].max_http3_conns, None);
+        assert_eq!(clients[1].username, "user2");
+        assert_eq!(clients[1].password, "pass2");
+        assert_eq!(clients[1].max_http2_conns, Some(10));
+        assert_eq!(clients[1].max_http3_conns, Some(20));
+    }
+
+    #[test]
+    fn test_load_clients_from_file_invalid_toml() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "invalid toml {{").unwrap();
+
+        let result = load_clients_from_file(file.path().to_str().unwrap());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Couldn't parse file"));
+    }
+
+    #[test]
+    fn test_load_clients_from_file_missing_file() {
+        let result = load_clients_from_file("/nonexistent/path/credentials.toml");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Couldn't read file"));
+    }
+
+    #[test]
+    fn test_load_clients_from_file_empty_username() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            r#"
+[[client]]
+username = ""
+password = "pass1"
+"#
+        )
+        .unwrap();
+
+        let result = load_clients_from_file(file.path().to_str().unwrap());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("username cannot be empty"));
+    }
+
+    #[test]
+    fn test_load_clients_from_file_empty_password() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            r#"
+[[client]]
+username = "user1"
+password = ""
+"#
+        )
+        .unwrap();
+
+        let result = load_clients_from_file(file.path().to_str().unwrap());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("password cannot be empty"));
+    }
+
+    #[test]
+    fn test_load_clients_from_file_not_array() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            r#"
+client = "not an array"
+"#
+        )
+        .unwrap();
+
+        let result = load_clients_from_file(file.path().to_str().unwrap());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Not an array of clients"));
+    }
 
     #[test]
     fn default_auth_failure_status_code_is_407() {

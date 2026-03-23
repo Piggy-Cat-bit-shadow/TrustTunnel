@@ -378,6 +378,8 @@ fn main() {
     };
 
     let shutdown = Shutdown::new();
+    let listen_address = *settings.get_listen_address();
+    let credentials_file_path = settings.get_credentials_file_path().map(String::from);
     let authenticator: Option<Arc<dyn Authenticator>> = if !settings.get_clients().is_empty() {
         Some(Arc::new(RegistryBasedAuthenticator::new(
             settings.get_clients(),
@@ -400,7 +402,7 @@ fn main() {
         async move { core.listen().await }
     };
 
-    let reload_tls_hosts_task = {
+    let reload_task = {
         let tls_hosts_settings_path = tls_hosts_settings_path.clone();
         async move {
             let mut sighup_listener = signal::unix::signal(signal::unix::SignalKind::hangup())
@@ -408,7 +410,7 @@ fn main() {
 
             loop {
                 sighup_listener.recv().await;
-                info!("Reloading TLS hosts settings");
+                info!("Reloading TLS hosts settings and credentials");
 
                 let tls_hosts_settings: settings::TlsHostsSettings = toml::from_str(
                     &std::fs::read_to_string(&tls_hosts_settings_path)
@@ -417,8 +419,26 @@ fn main() {
                 .expect("Couldn't parse the TLS hosts settings file");
 
                 core.reload_tls_hosts_settings(tls_hosts_settings)
-                    .expect("Couldn't apply new settings");
+                    .expect("Couldn't apply new TLS hosts settings");
                 info!("TLS hosts settings are successfully reloaded");
+
+                if let Some(ref creds_path) = credentials_file_path {
+                    match settings::load_clients_from_file(creds_path) {
+                        Ok(clients) => match core.reload_credentials(&clients, listen_address) {
+                            Ok(()) => {
+                                info!("Credentials successfully reloaded");
+                            }
+                            Err(e) => {
+                                error!("Failed to apply new credentials: {}", e);
+                            }
+                        },
+                        Err(e) => {
+                            error!("Failed to reload credentials file: {}", e);
+                        }
+                    }
+                } else {
+                    info!("No credentials file configured, skipping credential reload");
+                }
             }
         }
     };
@@ -439,8 +459,8 @@ fn main() {
                     1
                 }
             },
-            _ = reload_tls_hosts_task => {
-                error!("Error while reloading TLS hosts");
+            _ = reload_task => {
+                error!("Error while reloading settings");
                 1
             },
             _ = interrupt_task => {

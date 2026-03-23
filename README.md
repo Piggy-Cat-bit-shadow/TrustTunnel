@@ -244,6 +244,17 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now trusttunnel
 ```
 
+#### Reloading configuration without restart
+
+To reload TLS hosts and credentials without restarting:
+
+```bash
+sudo systemctl reload trusttunnel
+# or: sudo kill -HUP $(pidof trusttunnel_endpoint)
+```
+
+Changes are applied atomically. If the reload fails (e.g., invalid credentials file), the previous configuration remains active.
+
 #### Export client configuration
 
 The endpoint binary can generate client configurations in two formats:

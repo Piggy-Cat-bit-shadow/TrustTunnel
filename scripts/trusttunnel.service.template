@@ -4,6 +4,9 @@
 # sudo cp trusttunnel.service.template /etc/systemd/system/trusttunnel.service
 # sudo systemctl daemon-reload
 # sudo systemctl enable --now trusttunnel
+#
+# To reload TLS hosts and credentials without restarting:
+# sudo systemctl reload trusttunnel
 
 [Unit]
 Description=TrustTunnel endpoint
@@ -14,6 +17,7 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=/opt/trusttunnel
 ExecStart=/opt/trusttunnel/trusttunnel_endpoint vpn.toml hosts.toml
+ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=3
 

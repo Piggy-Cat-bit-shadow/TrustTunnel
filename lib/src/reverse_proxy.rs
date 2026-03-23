@@ -16,6 +16,13 @@ static ORIGINAL_PROTOCOL_HEADER: http::HeaderName =
     http::HeaderName::from_static("x-original-protocol");
 const H3_BUFFERED_BODY_LIMIT: usize = 2 * 1024 * 1024;
 
+fn contains_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
+    haystack
+        .as_bytes()
+        .windows(needle.len())
+        .any(|window| window.eq_ignore_ascii_case(needle.as_bytes()))
+}
+
 #[derive(Default)]
 struct SessionManager {
     active_streams_num: AtomicUsize,
@@ -183,14 +190,11 @@ async fn handle_stream(
             http1_codec::DecodeStatus::Partial(b) => buffer = b,
             http1_codec::DecodeStatus::Complete(mut h, tail) => {
                 h.version = original_version; // restore the version in case it was not the same
-                let transfer_encoding_raw = h
+                let is_chunked = h
                     .headers
                     .get(http::header::TRANSFER_ENCODING)
                     .and_then(|x| x.to_str().ok())
-                    .map(str::to_owned);
-                let is_chunked = transfer_encoding_raw
-                    .as_deref()
-                    .is_some_and(|v| v.to_ascii_lowercase().contains("chunked"));
+                    .is_some_and(|v| contains_ignore_ascii_case(v, "chunked"));
                 if !matches!(protocol, Protocol::Http1) {
                     // Strip hop-by-hop headers that are invalid in HTTP/2 and HTTP/3.
                     h.headers.remove(http::header::CONNECTION);

@@ -7,7 +7,7 @@ use std::borrow::Cow;
 use std::collections::HashSet;
 
 /// A client descriptor
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug, Clone)]
 pub struct Client {
     /// The client username
     pub username: String,
