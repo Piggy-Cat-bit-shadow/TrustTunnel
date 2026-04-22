@@ -1,10 +1,10 @@
 # CHANGELOG
 
+- [Feature] Preserve client source port on outgoing UDP connections. The endpoint now attempts to bind outgoing UDP sockets to the same source port the client application originally used, falling back to an OS-assigned ephemeral port when unavailable. This reduces NAT rebinding issues for protocols sensitive to source port changes.
 - [Feature] Added destination port filtering to rules config
     - Added `[inbound]` section for client filtering
     - Added `[outbound]` section for destination filtering
     - Rules in legacy configs are treated as `[inbound]`
-
 - [Feature] SIGHUP credential reload support
     - Credentials can now be reloaded without restarting the endpoint via `systemctl reload` or SIGHUP
     - Added `ExecReload` directive to systemd service template

@@ -86,6 +86,25 @@ pub(crate) fn make_udp_socket(is_v4: bool) -> io::Result<UdpSocket> {
     }
 }
 
+/// Try to bind a UDP socket to `preferred_port`. If the port is unavailable,
+/// fall back to an OS-assigned ephemeral port.
+pub(crate) fn make_udp_socket_with_preferred_port(
+    is_v4: bool,
+    preferred_port: u16,
+) -> io::Result<UdpSocket> {
+    let bind_addr = if is_v4 {
+        SocketAddr::from((Ipv4Addr::UNSPECIFIED, preferred_port))
+    } else {
+        SocketAddr::from((Ipv6Addr::UNSPECIFIED, preferred_port))
+    };
+
+    match UdpSocket::bind(bind_addr) {
+        Ok(socket) => Ok(socket),
+        Err(_) if preferred_port != 0 => make_udp_socket(is_v4),
+        Err(e) => Err(e),
+    }
+}
+
 /// https://www.rfc-editor.org/rfc/rfc9000.html#section-16
 pub(crate) const fn varint_len(x: usize) -> usize {
     if x <= 63 {
@@ -945,5 +964,45 @@ mod tests {
         // IPv4-compatible address ::192.168.1.1
         let compat: IpAddr = IpAddr::V6(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0xc0a8, 0x0101));
         assert_eq!(super::unmap_ipv6(compat), IpAddr::from([192, 168, 1, 1]));
+    }
+
+    #[test]
+    fn preferred_port_binds_when_free() {
+        use super::make_udp_socket_with_preferred_port;
+
+        let socket = make_udp_socket_with_preferred_port(true, 0).unwrap();
+        let port = socket.local_addr().unwrap().port();
+        // Port 0 means OS picks an ephemeral port, so the actual port must be non-zero.
+        assert_ne!(port, 0);
+        drop(socket);
+
+        // Bind to a specific port that we just confirmed is available.
+        let socket = make_udp_socket_with_preferred_port(true, port).unwrap();
+        assert_eq!(socket.local_addr().unwrap().port(), port);
+    }
+
+    #[test]
+    fn preferred_port_falls_back_when_taken() {
+        use super::make_udp_socket_with_preferred_port;
+
+        // Occupy a port.
+        let holder = make_udp_socket_with_preferred_port(true, 0).unwrap();
+        let occupied_port = holder.local_addr().unwrap().port();
+
+        // Request the same port -- should fall back to an ephemeral port.
+        let socket = make_udp_socket_with_preferred_port(true, occupied_port).unwrap();
+        assert_ne!(socket.local_addr().unwrap().port(), occupied_port);
+    }
+
+    #[test]
+    fn preferred_port_ipv6() {
+        use super::make_udp_socket_with_preferred_port;
+
+        let socket = make_udp_socket_with_preferred_port(false, 0).unwrap();
+        let port = socket.local_addr().unwrap().port();
+        drop(socket);
+
+        let socket = make_udp_socket_with_preferred_port(false, port).unwrap();
+        assert_eq!(socket.local_addr().unwrap().port(), port);
     }
 }

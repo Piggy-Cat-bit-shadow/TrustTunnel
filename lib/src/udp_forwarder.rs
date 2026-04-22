@@ -206,7 +206,7 @@ impl forwarder::UdpDatagramPipeShared for MultiplexerShared {
                 }
                 let metrics_guard = self.context.metrics.clone().outbound_udp_socket_counter();
                 e.insert(Connection {
-                    socket: Arc::new(make_udp_socket(&meta.destination)?),
+                    socket: Arc::new(make_udp_socket(&meta.destination, meta.source.port())?),
                     being_listened: false,
                     _metrics_guard: metrics_guard,
                 });
@@ -289,8 +289,9 @@ impl datagram_pipe::Sink for MultiplexerSink {
     }
 }
 
-fn make_udp_socket(peer: &SocketAddr) -> io::Result<UdpSocket> {
-    let socket = net_utils::make_udp_socket(peer.is_ipv4())?;
+fn make_udp_socket(peer: &SocketAddr, preferred_src_port: u16) -> io::Result<UdpSocket> {
+    let socket =
+        net_utils::make_udp_socket_with_preferred_port(peer.is_ipv4(), preferred_src_port)?;
     socket.connect(peer)?;
     socket.set_nonblocking(true)?;
     UdpSocket::from_std(socket)
