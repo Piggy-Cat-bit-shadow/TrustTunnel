@@ -21,6 +21,7 @@ pub(crate) struct Metrics {
     outbound_traffic: prometheus::IntCounterVec,
     outbound_tcp_sockets: prometheus::IntGauge,
     outbound_udp_sockets: prometheus::IntGauge,
+    auth_rate_limited: prometheus::IntCounter,
 }
 
 pub(crate) struct ClientSessionsCounter {
@@ -73,6 +74,12 @@ impl Metrics {
                 registry,
             )
             .map_err(prometheus_to_io_error)?,
+            auth_rate_limited: prometheus::register_int_counter_with_registry!(
+                "auth_rate_limited_total",
+                "Total number of connections rejected due to auth rate limiting",
+                registry,
+            )
+            .map_err(prometheus_to_io_error)?,
             _registry: registry,
         }))
     }
@@ -99,6 +106,10 @@ impl Metrics {
         self.outbound_traffic
             .with_label_values(&[protocol.as_str()])
             .inc_by(n as u64);
+    }
+
+    pub fn inc_auth_rate_limited(&self) {
+        self.auth_rate_limited.inc();
     }
 
     fn collect(&self) -> (String, Bytes) {

@@ -1,5 +1,7 @@
 # CHANGELOG
 
+- [Security] Reject credential switching within a single connection. When `allow_multiple_credentials_per_connection` is `false` (default), requests that present different credentials than the first authenticated request are rejected without checking.
+- [Feature] Add `max_auth_failures` and `auth_failure_refill_secs` config keys to rate-limit failed authentication attempts per source IP using a token-bucket algorithm. A Prometheus counter `auth_rate_limited_total` tracks blocked connections.
 - [Feature] Preserve client source port on outgoing UDP connections. The endpoint now attempts to bind outgoing UDP sockets to the same source port the client application originally used, falling back to an OS-assigned ephemeral port when unavailable. This reduces NAT rebinding issues for protocols sensitive to source port changes.
 - [Feature] Added destination port filtering to rules config
     - Added `[inbound]` section for client filtering

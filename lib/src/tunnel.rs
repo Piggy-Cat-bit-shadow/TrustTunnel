@@ -13,6 +13,7 @@ use crate::{
 use std::fmt::{Display, Formatter};
 use std::io;
 use std::io::ErrorKind;
+use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 
 #[derive(Clone)]
@@ -33,6 +34,8 @@ pub(crate) struct Tunnel {
     /// Set at construction time for SNI-authenticated connections,
     /// or lazily on the first authenticated request for proxy-basic connections.
     connection_guard: Option<ConnectionGuard>,
+    pub(crate) client_ip: Option<IpAddr>,
+    pinned_creds: Option<String>,
     id: log_utils::IdChain<u64>,
 }
 
@@ -70,6 +73,7 @@ impl Tunnel {
         forwarder: Box<dyn Forwarder>,
         authentication_policy: AuthenticationPolicy<'static>,
         connection_guard: Option<ConnectionGuard>,
+        client_ip: Option<IpAddr>,
         id: log_utils::IdChain<u64>,
     ) -> Self {
         Self {
@@ -78,6 +82,8 @@ impl Tunnel {
             forwarder: Arc::new(Mutex::new(forwarder)),
             authentication_policy,
             connection_guard,
+            client_ip,
+            pinned_creds: None,
             id,
         }
     }
@@ -133,6 +139,7 @@ impl Tunnel {
             let forwarder = self.forwarder.clone();
             let tls_domain = self.downstream.tls_domain().to_string();
             let authentication_policy = self.authentication_policy.clone();
+            let client_ip = self.client_ip;
             let log_id = self.id.clone();
             let update_metrics = {
                 let metrics = context.metrics.clone();
@@ -142,6 +149,33 @@ impl Tunnel {
                     pipe::SimplexDirection::Outgoing => metrics.add_outbound_bytes(protocol, n),
                 }
             };
+
+            if !self
+                .context
+                .settings
+                .allow_multiple_credentials_per_connection
+            {
+                if let Ok(Some(source)) = request
+                    .auth_info()
+                    .map(|x| x.map(authentication::Source::into_owned))
+                {
+                    let creds = match &source {
+                        authentication::Source::ProxyBasic(s) => s.as_ref(),
+                        authentication::Source::Sni(s) => s.as_ref(),
+                    };
+                    match &self.pinned_creds {
+                        None => self.pinned_creds = Some(creds.to_string()),
+                        Some(pinned) if pinned != creds => {
+                            log_id!(debug, self.id, "Credentials changed within connection");
+                            request.fail_request(ConnectionError::Authentication(
+                                "Authentication failed".to_string(),
+                            ));
+                            continue;
+                        }
+                        _ => {}
+                    }
+                }
+            }
 
             // For proxy-basic connections, lazily acquire the connection slot on the first
             // authenticated request. This means the limit applies to active tunnels that have
@@ -209,9 +243,26 @@ impl Tunnel {
                 let authenticator = context.credentials.read().unwrap().authenticator.clone();
                 let forwarder_auth = match (auth_info, authentication_policy, authenticator) {
                     (Ok(Some(source)), _, Some(ref authenticator)) => {
+                        if let Some((limiter, ip)) =
+                            context.auth_rate_limiter.as_ref().zip(client_ip)
+                        {
+                            if limiter.is_blocked(ip) {
+                                log_id!(debug, request_id, "Auth rate-limited for IP {}", ip);
+                                context.metrics.inc_auth_rate_limited();
+                                request.fail_request(ConnectionError::Authentication(
+                                    "Authentication failed".to_string(),
+                                ));
+                                return;
+                            }
+                        }
                         match authenticator.authenticate(&source, &log_id) {
                             Status::Pass => Some(source),
                             Status::Reject => {
+                                if let Some((limiter, ip)) =
+                                    context.auth_rate_limiter.as_ref().zip(client_ip)
+                                {
+                                    limiter.record_failure(ip);
+                                }
                                 let err = ConnectionError::Authentication(
                                     "Authentication failed".to_string(),
                                 );

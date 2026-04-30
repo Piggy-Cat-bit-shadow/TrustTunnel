@@ -226,6 +226,20 @@ pub struct Settings {
     #[serde(default)]
     pub(crate) default_max_http3_conns_per_client: Option<u32>,
 
+    /// Max failed auth attempts per source IP before rate-limiting. 0 = disabled.
+    #[serde(default = "Settings::default_max_auth_failures")]
+    pub(crate) max_auth_failures: u32,
+
+    /// Seconds between restoring one failed-attempt token per source IP.
+    #[serde(default = "Settings::default_auth_failure_refill_secs")]
+    pub(crate) auth_failure_refill_secs: u64,
+
+    /// Allow different credentials on successive requests within one connection.
+    /// When false, the first credentials used on a connection are pinned; any
+    /// subsequent request with different credentials is rejected without checking.
+    #[serde(default)]
+    pub(crate) allow_multiple_credentials_per_connection: bool,
+
     /// Whether an instance was built through a [`SettingsBuilder`].
     /// This flag is a workaround for absence of the ability to validate
     /// the deserialized structure.
@@ -554,6 +568,12 @@ impl Settings {
             ));
         }
 
+        if self.max_auth_failures > 0 && self.auth_failure_refill_secs == 0 {
+            return Err(ValidationError::ListenProtocols(
+                "auth_failure_refill_secs must be > 0 when rate limiting is enabled".into(),
+            ));
+        }
+
         Ok(())
     }
 
@@ -607,6 +627,14 @@ impl Settings {
 
     pub fn default_auth_failure_status_code() -> u16 {
         407
+    }
+
+    pub fn default_max_auth_failures() -> u32 {
+        5
+    }
+
+    pub fn default_auth_failure_refill_secs() -> u64 {
+        10
     }
 
     /// Returns the list of configured clients
@@ -674,6 +702,9 @@ impl Default for Settings {
             default_max_http2_conns_per_client: None,
             default_max_http3_conns_per_client: None,
             auth_failure_status_code: Settings::default_auth_failure_status_code(),
+            max_auth_failures: Settings::default_max_auth_failures(),
+            auth_failure_refill_secs: Settings::default_auth_failure_refill_secs(),
+            allow_multiple_credentials_per_connection: false,
             built: false,
         }
     }
@@ -934,6 +965,9 @@ impl SettingsBuilder {
                 default_max_http2_conns_per_client: None,
                 default_max_http3_conns_per_client: None,
                 auth_failure_status_code: Settings::default_auth_failure_status_code(),
+                max_auth_failures: Settings::default_max_auth_failures(),
+                auth_failure_refill_secs: Settings::default_auth_failure_refill_secs(),
+                allow_multiple_credentials_per_connection: false,
                 built: true,
             },
         }
@@ -1070,6 +1104,21 @@ impl SettingsBuilder {
     /// Set the HTTP status code for authentication failures (407 or 405)
     pub fn auth_failure_status_code(mut self, x: u16) -> Self {
         self.settings.auth_failure_status_code = x;
+        self
+    }
+
+    pub fn max_auth_failures(mut self, x: u32) -> Self {
+        self.settings.max_auth_failures = x;
+        self
+    }
+
+    pub fn auth_failure_refill_secs(mut self, x: u64) -> Self {
+        self.settings.auth_failure_refill_secs = x;
+        self
+    }
+
+    pub fn allow_multiple_credentials_per_connection(mut self, x: bool) -> Self {
+        self.settings.allow_multiple_credentials_per_connection = x;
         self
     }
 
@@ -2013,5 +2062,23 @@ client = "not an array"
             err,
             ValidationError::InvalidAuthFailureStatusCode(200)
         ));
+    }
+
+    #[test]
+    fn zero_refill_secs_with_rate_limiting_enabled_is_invalid() {
+        let mut settings = Settings::default();
+        settings.listen_address = (Ipv4Addr::LOCALHOST, 8443).into();
+        settings.max_auth_failures = 5;
+        settings.auth_failure_refill_secs = 0;
+        assert!(settings.validate().is_err());
+    }
+
+    #[test]
+    fn zero_refill_secs_with_rate_limiting_disabled_is_valid() {
+        let mut settings = Settings::default();
+        settings.listen_address = (Ipv4Addr::LOCALHOST, 8443).into();
+        settings.max_auth_failures = 0;
+        settings.auth_failure_refill_secs = 0;
+        assert!(settings.validate().is_ok());
     }
 }

@@ -408,3 +408,167 @@ fn make_socks_server_harness() -> (SocketAddr, impl Future<Output = Vec<u8>>) {
 
     (server_addr, task)
 }
+
+async fn run_endpoint_cred_pinning(listen_address: &SocketAddr, allow_multiple: bool) {
+    let settings = Settings::builder()
+        .listen_address(listen_address)
+        .unwrap()
+        .listen_protocols(ListenProtocolSettings {
+            http2: Some(trusttunnel::settings::Http2Settings::builder().build()),
+            ..Default::default()
+        })
+        .allow_private_network_connections(true)
+        .allow_multiple_credentials_per_connection(allow_multiple)
+        .clients(vec![
+            authentication::registry_based::Client {
+                username: "a".into(),
+                password: "b".into(),
+                max_http2_conns: None,
+                max_http3_conns: None,
+            },
+            authentication::registry_based::Client {
+                username: "c".into(),
+                password: "d".into(),
+                max_http2_conns: None,
+                max_http3_conns: None,
+            },
+        ])
+        .build()
+        .unwrap();
+
+    let cert_key_file = common::make_cert_key_file();
+    let cert_key_path = cert_key_file.path.to_str().unwrap();
+    let hosts_settings = TlsHostsSettings::builder()
+        .main_hosts(vec![TlsHostInfo {
+            hostname: common::MAIN_DOMAIN_NAME.to_string(),
+            cert_chain_path: cert_key_path.to_string(),
+            private_key_path: cert_key_path.to_string(),
+            allowed_sni: vec![],
+        }])
+        .build()
+        .unwrap();
+
+    common::run_endpoint_with_settings(settings, hosts_settings).await;
+}
+
+async fn h2_connect_twice(
+    endpoint_address: &SocketAddr,
+    first_auth: &str,
+    second_auth: &str,
+) -> Option<http::StatusCode> {
+    let stream =
+        common::establish_tls_connection(common::MAIN_DOMAIN_NAME, endpoint_address, Some(b"h2"))
+            .await;
+
+    let (mut sender, conn_driver) = hyper::client::conn::Builder::new()
+        .http2_only(true)
+        .handshake(stream)
+        .await
+        .unwrap();
+    tokio::spawn(conn_driver);
+
+    // First request
+    let req1 = Request::builder()
+        .method(http::Method::CONNECT)
+        .uri("httpbin.agrd.dev:443")
+        .header(
+            http::header::PROXY_AUTHORIZATION,
+            format!("Basic {}", BASE64_ENGINE.encode(first_auth)),
+        )
+        .body(hyper::Body::empty())
+        .unwrap();
+    let resp1 = sender.send_request(req1).await.unwrap();
+    assert_eq!(
+        resp1.status(),
+        http::StatusCode::OK,
+        "first request must succeed"
+    );
+
+    let req2 = Request::builder()
+        .method(http::Method::CONNECT)
+        .uri("httpbin.agrd.dev:443")
+        .header(
+            http::header::PROXY_AUTHORIZATION,
+            format!("Basic {}", BASE64_ENGINE.encode(second_auth)),
+        )
+        .body(hyper::Body::empty())
+        .unwrap();
+    match sender.send_request(req2).await {
+        Ok(resp2) => Some(resp2.status()),
+        Err(_) => None,
+    }
+}
+
+#[tokio::test]
+async fn credential_pinning_rejects_different_creds_on_same_connection() {
+    common::set_up_logger();
+    let endpoint_address = common::make_endpoint_address();
+
+    let client_task = async {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+
+        let result = h2_connect_twice(&endpoint_address, "a:b", "c:d").await;
+
+        assert_eq!(
+            result,
+            Some(http::StatusCode::PROXY_AUTHENTICATION_REQUIRED),
+            "credential switch must be rejected",
+        );
+    };
+
+    tokio::select! {
+        _ = run_endpoint_cred_pinning(&endpoint_address, false) => unreachable!(),
+        _ = client_task => (),
+        _ = tokio::time::sleep(Duration::from_secs(10)) => panic!("Timed out"),
+    }
+}
+
+#[tokio::test]
+async fn credential_pinning_allows_same_creds_on_same_connection() {
+    common::set_up_logger();
+    let endpoint_address = common::make_endpoint_address();
+
+    let client_task = async {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+
+        let result = h2_connect_twice(&endpoint_address, "a:b", "a:b").await;
+
+        // Same creds must NOT be rejected by pinning.
+        assert!(
+            result.is_some() && result != Some(http::StatusCode::BAD_REQUEST),
+            "same creds must not be rejected by pinning, got: {:?}",
+            result
+        );
+    };
+
+    tokio::select! {
+        _ = run_endpoint_cred_pinning(&endpoint_address, false) => unreachable!(),
+        _ = client_task => (),
+        _ = tokio::time::sleep(Duration::from_secs(10)) => panic!("Timed out"),
+    }
+}
+
+#[tokio::test]
+async fn credential_pinning_disabled_allows_different_creds() {
+    common::set_up_logger();
+    let endpoint_address = common::make_endpoint_address();
+
+    let client_task = async {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+
+        let result = h2_connect_twice(&endpoint_address, "a:b", "c:d").await;
+
+        // With pinning disabled, different valid creds must not be rejected.
+        assert!(
+            result.is_some() && result != Some(http::StatusCode::BAD_REQUEST),
+            "different creds must be accepted when pinning disabled, got: {:?}",
+            result
+        );
+    };
+
+    tokio::select! {
+        _ = run_endpoint_cred_pinning(&endpoint_address, true) => unreachable!(),
+        _ = client_task => (),
+        _ = tokio::time::sleep(Duration::from_secs(10)) => panic!("Timed out"),
+    }
+}

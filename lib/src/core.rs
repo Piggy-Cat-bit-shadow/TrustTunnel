@@ -1,3 +1,4 @@
+use crate::auth_rate_limiter::{self, AuthRateLimiter, AuthRateLimiterConfig};
 use crate::authentication::registry_based::RegistryBasedAuthenticator;
 use crate::connection_limiter::ConnectionLimiter;
 use crate::direct_forwarder::DirectForwarder;
@@ -26,6 +27,7 @@ use std::io;
 use std::io::ErrorKind;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
+use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::{TcpListener, UdpSocket};
 use tokio::sync::watch;
@@ -86,6 +88,7 @@ pub(crate) struct Context {
     /// Spawned tasks report errors via Context::report_fatal_io_error().
     fatal_error: watch::Sender<Option<FatalIoError>>,
     pub metrics: Arc<Metrics>,
+    pub auth_rate_limiter: Option<Arc<AuthRateLimiter>>,
     next_client_id: Arc<AtomicU64>,
     next_tunnel_id: Arc<AtomicU64>,
 }
@@ -139,6 +142,16 @@ impl Core {
             None
         };
 
+        let auth_rate_limiter = if settings.max_auth_failures > 0 {
+            Some(Arc::new(AuthRateLimiter::new(AuthRateLimiterConfig {
+                max_failures: settings.max_auth_failures,
+                refill_interval: Duration::from_secs(settings.auth_failure_refill_secs),
+                eviction_timeout: auth_rate_limiter::EVICTION_TIMEOUT,
+            })))
+        } else {
+            None
+        };
+
         Ok(Self {
             context: Arc::new(Context {
                 settings: settings.clone(),
@@ -158,6 +171,7 @@ impl Core {
                 shutdown,
                 fatal_error,
                 metrics: Metrics::new().map_err(|e| Error::Metrics(e.to_string()))?,
+                auth_rate_limiter,
                 next_client_id: Default::default(),
                 next_tunnel_id: Default::default(),
             }),
@@ -201,6 +215,20 @@ impl Core {
         };
 
         let mut fatal_error_rx = self.context.fatal_error.subscribe();
+
+        if let Some(limiter) = self.context.auth_rate_limiter.clone() {
+            let mut shutdown_notification =
+                self.context.shutdown.lock().unwrap().notification_handler();
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(auth_rate_limiter::EVICTION_INTERVAL);
+                loop {
+                    tokio::select! {
+                        _ = interval.tick() => limiter.evict_expired(),
+                        _ = shutdown_notification.wait() => break,
+                    }
+                }
+            });
+        }
 
         tokio::select! {
             x = shutdown_notification.wait() => {
@@ -559,6 +587,7 @@ impl Core {
                     },
                     tls_connection_meta.sni,
                     tls_connection_meta.sni_auth_creds,
+                    Some(client_ip),
                     tunnel_id,
                 )
                 .await
@@ -672,6 +701,7 @@ impl Core {
                     Box::new(Http3Codec::new(socket, tunnel_id.clone())),
                     sni,
                     sni_auth_creds,
+                    client_ip,
                     tunnel_id,
                 )
                 .await
@@ -750,6 +780,7 @@ impl Core {
         codec: Box<dyn HttpCodec>,
         server_name: String,
         sni_auth_creds: Option<String>,
+        client_ip: Option<std::net::IpAddr>,
         tunnel_id: log_utils::IdChain<u64>,
     ) {
         let _metrics_guard = Metrics::client_sessions_counter(context.metrics.clone(), protocol);
@@ -763,6 +794,13 @@ impl Core {
             {
                 None => (tunnel::AuthenticationPolicy::Default, None),
                 Some((authenticator, credentials)) => {
+                    if let Some((limiter, ip)) = context.auth_rate_limiter.as_ref().zip(client_ip) {
+                        if limiter.is_blocked(ip) {
+                            log_id!(debug, tunnel_id, "SNI auth rate-limited for IP {}", ip);
+                            context.metrics.inc_auth_rate_limited();
+                            return;
+                        }
+                    }
                     let auth = authentication::Source::Sni(credentials.to_string().into());
                     match authenticator.authenticate(&auth, &tunnel_id) {
                         authentication::Status::Pass => {
@@ -785,6 +823,11 @@ impl Core {
                             (tunnel::AuthenticationPolicy::Authenticated(auth), guard)
                         }
                         authentication::Status::Reject => {
+                            if let Some((limiter, ip)) =
+                                context.auth_rate_limiter.as_ref().zip(client_ip)
+                            {
+                                limiter.record_failure(ip);
+                            }
                             log_id!(debug, tunnel_id, "SNI authentication failed");
                             return;
                         }
@@ -800,6 +843,7 @@ impl Core {
             Self::make_forwarder(context),
             authentication_policy,
             sni_connection_guard,
+            client_ip,
             tunnel_id.clone(),
         );
 
@@ -856,6 +900,7 @@ impl Default for Context {
             shutdown: Shutdown::new(),
             fatal_error,
             metrics: Metrics::new().unwrap(),
+            auth_rate_limiter: None,
             next_client_id: Default::default(),
             next_tunnel_id: Default::default(),
         }

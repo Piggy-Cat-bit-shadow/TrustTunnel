@@ -14,6 +14,7 @@ pub mod settings;
 pub mod shutdown;
 pub mod utils;
 
+mod auth_rate_limiter;
 mod connection_limiter;
 mod datagram_pipe;
 mod direct_forwarder;
