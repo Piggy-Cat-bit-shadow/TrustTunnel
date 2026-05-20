@@ -16,7 +16,7 @@ on:
 jobs:
   mirror:
     name: Mirror to public repository
-    if: github.repository == 'AdGuardSoftwareLimited/vpn-libs-endpoint'
+    if: github.repository == 'AdGuardSoftwareLimited/trusttunnel-endpoint'
     uses: AdGuardSoftwareLimited/actions/.github/workflows/mirror.yml@master
     with:
       target_repo: 'git@github.com:TrustTunnel/TrustTunnel.git'

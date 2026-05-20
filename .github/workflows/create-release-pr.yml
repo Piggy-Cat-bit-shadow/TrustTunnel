@@ -16,7 +16,7 @@ on:
 jobs:
   create-release-pr:
     name: Create release PR
-    if: github.repository == 'AdGuardSoftwareLimited/vpn-libs-endpoint'
+    if: github.repository == 'AdGuardSoftwareLimited/trusttunnel-endpoint'
     uses: AdGuardSoftwareLimited/native-libs-common/.github/workflows/create-release-pr.yml@master
     with:
       semver_part: ${{ inputs.semver_part }}
