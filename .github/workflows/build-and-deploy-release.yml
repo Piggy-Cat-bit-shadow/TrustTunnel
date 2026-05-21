@@ -1,0 +1,111 @@
+name: Build and deploy release
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build release artifacts
+    if: github.repository == 'AdGuardSoftwareLimited/trusttunnel-endpoint'
+    runs-on:
+      - ephemeral
+      - ephemeral-linux
+      - ${{ vars.BUILD_IMAGE_VERSION_CORELIBS_BUILDER }}
+      - ephemeral-limit-memory-8192
+      - ephemeral-limit-cpu-6
+      - ephemeral-limit-disk-gb-70
+    container:
+      image: adguard/core-libs:2.10
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Retrieve GPG signing secrets
+        uses: hashicorp/vault-action@v3
+        with:
+          url: ${{ vars.VAULT_URL }}
+          method: jwt
+          role: gpg-signing
+          secrets: |
+            secret/data/ci-secrets/gpg-signing gpgSecretKey | GPG_SECRET_KEY ;
+            secret/data/ci-secrets/gpg-signing gpgPassword | GPG_PASSWORD
+
+      - name: Detect version
+        id: version
+        run: |
+          VERSION=$(grep '^version = ' endpoint/Cargo.toml | head -1 | sed -e 's/version = "\(.*\)"/\1/')
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and package
+        run: |
+          set -e -x
+
+          # Build x86_64 musl
+          CC=x86_64-linux-musl-gcc \
+          CXX=x86_64-linux-musl-g++ \
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=x86_64-linux-musl-gcc \
+          BINDGEN_EXTRA_CLANG_ARGS="--sysroot=/opt/cross/x86_64-linux-musl" \
+          cargo build --release --target x86_64-unknown-linux-musl
+
+          # Build aarch64 musl
+          CC=aarch64-linux-musl-gcc \
+          CXX=aarch64-linux-musl-g++ \
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-musl-gcc \
+          BINDGEN_EXTRA_CLANG_ARGS="--sysroot=/opt/cross/aarch64-linux-musl" \
+          cargo build --release --target aarch64-unknown-linux-musl
+
+          # Package: strip, split debug symbols, GPG sign, tar.gz
+          scripts/ci/package_release.sh
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-artifacts
+          path: artifacts/*.tar.gz
+
+  deploy:
+    name: Deploy release
+    needs: build
+    if: github.repository == 'AdGuardSoftwareLimited/trusttunnel-endpoint'
+    environment: release-github
+    runs-on: [team-corelibs]
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Detect version
+        id: version
+        run: |
+          VERSION=$(grep '^version = ' endpoint/Cargo.toml | head -1 | sed -e 's/version = "\(.*\)"/\1/')
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: release-*
+          merge-multiple: true
+
+      - name: Create GitHub Release on public repo
+        env:
+          GH_TOKEN: ${{ secrets.PUBLIC_REPO_GPR_KEY }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -e -x
+          TAG=v${VERSION}
+          CHANGELOG_URL="https://github.com/TrustTunnel/TrustTunnel/blob/${TAG}/CHANGELOG.md"
+
+          gh release delete -y ${TAG} -R TrustTunnel/TrustTunnel || true
+          gh release create ${TAG} \
+            -R TrustTunnel/TrustTunnel \
+            -t "${TAG}" \
+            -n "See [CHANGELOG.md](${CHANGELOG_URL}) for the list of changes."
+
+          for f in artifacts/*.tar.gz; do
+            gh release upload ${TAG} "$f" -R TrustTunnel/TrustTunnel
+          done
