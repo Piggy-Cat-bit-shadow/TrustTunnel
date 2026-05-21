@@ -34,28 +34,8 @@ OLD_VERSION=$(grep '^version = ' "$cargo_toml" | head -1 | sed -e 's/version = "
 sed -i -e "s/^version = \"${OLD_VERSION}\"/version = \"${VERSION}\"/" "$cargo_toml"
 echo "Updated ${cargo_toml}"
 
-# Cargo.lock — update trusttunnel_endpoint package version
-python3 -c "
-with open('Cargo.lock', 'r', encoding='UTF-8') as file:
-    content = file.read()
-
-output = ''
-is_in_endpoint_section = False
-for line in content.splitlines():
-    if line == 'name = \"trusttunnel_endpoint\"':
-        is_in_endpoint_section = True
-    elif is_in_endpoint_section and line == '[[package]]':
-        is_in_endpoint_section = False
-
-    if is_in_endpoint_section and line == 'version = \"${OLD_VERSION}\"':
-        output += 'version = \"${VERSION}\"\n'
-        continue
-
-    output += line + '\n'
-
-with open('Cargo.lock', 'w') as file:
-    file.write(output)
-"
+# Cargo.lock — regenerate to pick up the new version
+cargo generate-lockfile
 echo "Updated Cargo.lock"
 
 # scripts/install.sh

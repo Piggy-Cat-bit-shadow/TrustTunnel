@@ -66,9 +66,94 @@ jobs:
           name: release-artifacts
           path: artifacts/*.tar.gz
 
+  build-macos:
+    name: Build macOS artifacts
+    if: github.repository == 'AdGuardSoftwareLimited/trusttunnel-endpoint'
+    runs-on:
+      - ephemeral
+      - ephemeral-mac
+      - ${{ vars.BUILD_IMAGE_VERSION_MACOS }}
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Retrieve GPG signing secrets
+        uses: hashicorp/vault-action@v3
+        with:
+          url: ${{ vars.VAULT_URL }}
+          method: jwt
+          role: gpg-signing
+          secrets: |
+            secret/data/ci-secrets/gpg-signing gpgSecretKey | GPG_SECRET_KEY ;
+            secret/data/ci-secrets/gpg-signing gpgPassword | GPG_PASSWORD
+
+      - name: Detect version
+        id: version
+        run: |
+          VERSION=$(grep '^version = ' endpoint/Cargo.toml | head -1 | sed -e 's/version = "\(.*\)"/\1/')
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and package
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          GPG_KEY: devteam@adguard.com
+        run: |
+          set -e -x
+
+          echo "$GPG_SECRET_KEY" | gpg --import --batch --yes
+
+          cargo build --release --target x86_64-apple-darwin
+          cargo build --release --target aarch64-apple-darwin
+
+          mkdir -p artifacts
+          NAME="trusttunnel-v${VERSION}-macos-universal"
+
+          lipo -create \
+            -output trusttunnel_endpoint \
+            target/x86_64-apple-darwin/release/trusttunnel_endpoint \
+            target/aarch64-apple-darwin/release/trusttunnel_endpoint
+
+          lipo -create \
+            -output setup_wizard \
+            target/x86_64-apple-darwin/release/setup_wizard \
+            target/aarch64-apple-darwin/release/setup_wizard
+
+          dsymutil trusttunnel_endpoint -o trusttunnel_endpoint.dSYM
+          dsymutil setup_wizard -o setup_wizard.dSYM
+
+          strip trusttunnel_endpoint
+          strip setup_wizard
+
+          gpg --default-key "${GPG_KEY}" --detach-sig \
+              --passphrase "${GPG_PASSWORD}" --pinentry-mode loopback \
+              trusttunnel_endpoint
+          gpg --default-key "${GPG_KEY}" --detach-sig \
+              --passphrase "${GPG_PASSWORD}" --pinentry-mode loopback \
+              setup_wizard
+
+          cp LICENSE .
+          tar zcf "${NAME}.tar.gz" -s ",^,${NAME}/," \
+            trusttunnel_endpoint trusttunnel_endpoint.sig \
+            setup_wizard setup_wizard.sig LICENSE
+          mv "${NAME}.tar.gz" artifacts/
+
+          NAME_DBG="${NAME}-dbgsym"
+          tar zcf "${NAME_DBG}.tar.gz" -s ",^,${NAME_DBG}/," \
+            trusttunnel_endpoint.dSYM setup_wizard.dSYM
+          mv "${NAME_DBG}.tar.gz" artifacts/
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-macos
+          path: artifacts/trusttunnel-*.tar.gz
+
   deploy:
     name: Deploy release
-    needs: build
+    needs: [build, build-macos]
     if: github.repository == 'AdGuardSoftwareLimited/trusttunnel-endpoint'
     environment: release-github
     runs-on: [team-corelibs]
