@@ -15,7 +15,8 @@ jobs:
     runs-on: ubuntu-latest
     if: github.repository == 'TrustTunnel/TrustTunnel'
     steps:
-      - uses: actions/checkout@v6
+      - name: Checkout
+        uses: actions/checkout@v6
       - name: Lint Markdown
         run: |
           npm install -g markdownlint-cli

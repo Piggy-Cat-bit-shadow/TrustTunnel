@@ -22,7 +22,8 @@ jobs:
     container:
       image: adguard/core-libs:2.10
     steps:
-      - uses: actions/checkout@v6
+      - name: Checkout
+        uses: actions/checkout@v6
       - name: Run tests
         run: cargo test --workspace
       - name: Lint Rust
@@ -38,6 +39,7 @@ jobs:
       - ephemeral-mac
       - ${{ vars.BUILD_IMAGE_VERSION_MACOS }}
     steps:
-      - uses: actions/checkout@v6
+      - name: Checkout
+        uses: actions/checkout@v6
       - name: Run tests
         run: cargo test --workspace
