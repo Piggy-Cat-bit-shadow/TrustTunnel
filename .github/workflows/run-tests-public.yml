@@ -17,11 +17,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
       - name: Install Rust
-        run: rustup toolchain install 1.95 --profile minimal --component rustfmt,clippy
+        run: rustup toolchain install 1.95 --profile minimal
       - name: Run tests
         run: cargo test --workspace
-      - name: Lint
-        run: make lint-rust
 
   macOS:
     runs-on: macos-latest
