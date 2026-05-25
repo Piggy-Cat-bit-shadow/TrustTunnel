@@ -18,19 +18,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Security
 
-## [1.0.41]
+## [1.0.41] - 2026-04-30
 
 ### Added
 
 - `non_connect_auth_failure_status_code` config key to control the HTTP status code returned on authentication failure for non-CONNECT requests. Extend allowed values for `auth_failure_status_code` and `non_connect_auth_failure_status_code` to 407, 405, 404, and 403.
 
-## [1.0.28]
+## [1.0.28] - 2026-03-25
 
 ### Added
 
 - `trusttunnel_endpoint -c` can now generate `client_random_prefix` values automatically, append matching allow rules to `rules.toml`, and embed the generated value into exported client configs.
 
-## [1.0.17]
+## [1.0.17] - 2026-03-10
 
 ### Added
 
@@ -41,19 +41,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Reverse proxy routing for H2/H3.
 
-## [1.0.16]
+## [1.0.16] - 2026-03-09
 
 ### Fixed
 
 - HTTP/1.1 codec busy loop when receiving partial request headers.
 
-## [1.0.13]
+## [1.0.13] - 2026-03-04
 
 ### Fixed
 
 - Change deep-link format from `tt://` to `tt://?`. For backward compatibility, `tt://` is still supported.
 
-## [1.0.11]
+## [1.0.11] - 2026-03-02
 
 ### Security
 
@@ -65,7 +65,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     - Handle IPv4-mapped IPv6 addresses (`::ffff:x.x.x.x`) in `is_global_ip`
   (Based on [GitHub PR #79](https://github.com/TrustTunnel/TrustTunnel/pull/79) by @andrew-morris)
 
-## [1.0.7]
+## [1.0.7] - 2026-02-26
 
 ### Added
 
@@ -82,13 +82,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     - Added new `connection_limiter` module with `ConnectionLimiter` and `ConnectionGuard` types
     - Added `connection_limiter` field to `core::Context`
 
-## [1.0.6]
+## [1.0.6] - 2026-02-26
 
 ### Added
 
 - Support for X25519MLKEM768 post-quantum group.
 
-## [1.0.5]
+## [1.0.5] - 2026-02-26
 
 ### Added
 
@@ -98,7 +98,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - When listening on `[::]`, the endpoint now explicitly sets `IPV6_V6ONLY=false` to accept
   both IPv4 and IPv6 connections on a single socket (dual-stack).
 
-## [1.0.1]
+## [1.0.1] - 2026-02-25
 
 ### Added
 
@@ -108,27 +108,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     - Validates hex format and checks against `rules.toml`
     - Added to deep-link format as tag 0x0B
 
-## [0.9.127]
+## [0.9.127] - 2026-02-09
 
 ### Added
 
 - GPG signing of the endpoint binaries.
 
-## [0.9.122]
+## [0.9.122] - 2026-01-30
 
 ### Changed
 
 - Endpoint now requires credentials when listening on a public address.
 - Added support of shortened QUIC settings names in configuration files.
 
-## [0.9.115]
+## [0.9.115] - 2026-01-23
 
 ### Security
 
 - Fixed an issue where `client_random_prefix` rules didn't match when Anti-DPI or post-quantum cryptography was enabled.
   (<https://github.com/TrustTunnel/TrustTunnel/security/advisories/GHSA-fqh7-r5gf-3r87>)
 
-## [0.9.114]
+## [0.9.114] - 2026-01-23
 
 ### Security
 
@@ -136,7 +136,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   when a numeric address was used.
   (<https://github.com/TrustTunnel/TrustTunnel/security/advisories/GHSA-hgr9-frvw-5r76>)
 
-## [0.9.87]
+## [0.9.87] - 2025-12-22
 
 ### Added
 
@@ -145,7 +145,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Improved the CLI interface of `setup_wizard` and provided better post-setup
   guidance there.
 
-## [0.9.77]
+## [0.9.77] - 2025-12-21
 
 ### Added
 
@@ -160,14 +160,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Project warnings
 
-## [0.9.61]
+## [0.9.61] - 2024-12-10
 
 ### Changed
 
 - Removed old docker image
 - Added new [docker image](Dockerfile) with improved build and run logic
 
-## [0.9.56]
+## [0.9.56] - 2023-07-20
 
 ### Added
 
@@ -177,19 +177,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   E.g., with `setup_wizard --lib-settings vpn.toml` it won't ask a user for the library
   settings file path.
 
-## [0.9.47]
+## [0.9.47] - 2023-06-26
 
 ### Removed
 
 - RADIUS-based authenticator
 
-## [0.9.45]
+## [0.9.45] - 2023-06-06
 
 ### Changed
 
 - The executable now expects that the configuration files are TOML-formatted
 
-## [0.9.38]
+## [0.9.38] - 2023-04-03
 
 ### Fixed
 
@@ -200,7 +200,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   The executable related changes:
     - the settings file is changed accordingly to the changes described above
 
-## [0.9.36]
+## [0.9.36] - 2023-04-03
 
 ### Changed
 
@@ -212,7 +212,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   The executable related changes:
     - the settings file is changed accordingly to the changes described above
 
-## [0.9.30]
+## [0.9.30] - 2023-03-06
 
 ### Added
 
@@ -229,7 +229,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     - The executable is now handling the SIGHUP signal to trigger the reloading
       ([see here](./README.md#dynamic-reloading-of-tls-hosts-settings) for details)
 
-## [0.9.29]
+## [0.9.29] - 2023-03-06
 
 ### Changed
 
@@ -243,7 +243,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     - `threads_number` field in a settings file is now ignored
     - The number of worker threads may be specified via commandline argument (see the executable help for details)
 
-## [0.9.28]
+## [0.9.28] - 2023-03-03
 
 ### Changed
 
@@ -254,7 +254,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     - `settings::Settings::speed_tls_host_info` is renamed to `settings::Settings::speed_tls_hosts` and is now a vector of hosts
     - `settings::ReverseProxySettings::tls_host_info` is renamed to `settings::ReverseProxySettings::tls_hosts` and is now a vector of hosts
 
-## [0.9.24]
+## [0.9.24] - 2022-11-21
 
 ### Added
 
