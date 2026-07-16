@@ -3561,6 +3561,7 @@ dependencies = [
  "tls-parser",
  "tokio",
  "tokio-rustls",
+ "toml",
  "toml_edit 0.19.15",
  "trusttunnel-deeplink",
 ]
