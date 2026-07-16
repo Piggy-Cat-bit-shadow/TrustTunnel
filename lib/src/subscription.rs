@@ -1,4 +1,4 @@
-use crate::settings::{Settings, ValidationError};
+use crate::settings::{Settings, TlsHostsSettings, ValidationError};
 
 /// The `[subscription]` settings parsed from `vpn.toml`.
 ///
@@ -61,7 +61,6 @@ impl Default for SubscriptionSettings {
 /// Returns `Ok(())` only for an **enabled**, fully-specified section. The
 /// hostname-must-match-`main_hosts` and certificate-resolution checks live in
 /// `resolve`, which needs the hosts settings.
-#[allow(dead_code)] // consumed by `resolve` (wired in the serving task)
 pub(crate) fn validate(
     sub: &SubscriptionSettings,
     settings: &Settings,
@@ -127,6 +126,105 @@ fn check_path_overlap(path: &str, other: Option<&str>) -> Result<(), ValidationE
         )));
     }
     Ok(())
+}
+
+/// Resolved runtime subscription configuration.
+///
+/// Built by [`resolve`] from the parsed settings and the loaded TLS hosts. The
+/// certificate is read once (at load/reload) so request handling is self-contained.
+#[derive(Clone)]
+pub(crate) struct SubscriptionConfig {
+    pub(crate) enabled: bool,
+    pub(crate) path: String,
+    pub(crate) hostname: String,
+    pub(crate) address: String,
+    pub(crate) name: Option<String>,
+    pub(crate) dns_upstreams: Vec<String>,
+    pub(crate) has_ipv6: bool,
+    /// `Some(pem)` when the certificate is not system-verifiable; `None` otherwise.
+    pub(crate) certificate: Option<String>,
+    /// Custom SNI; `None` when unset/empty (omitted from the JSON).
+    pub(crate) custom_sni: Option<String>,
+    /// Client-random hex prefix; `None` when unset/empty (omitted from the JSON).
+    pub(crate) client_random_prefix: Option<String>,
+}
+
+/// The JSON body served to an authenticated user.
+#[derive(serde::Serialize)]
+pub(crate) struct SubscriptionResponse<'a> {
+    pub version: u32,
+    pub hostname: &'a str,
+    pub address: &'a str,
+    pub username: &'a str,
+    pub password: &'a str,
+    pub has_ipv6: bool,
+    pub upstream_protocol: &'a str,
+    pub anti_dpi: bool,
+    pub skip_verification: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub certificate: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub custom_sni: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_random_prefix: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<&'a str>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub dns_upstreams: &'a Vec<String>,
+}
+
+/// Resolve an enabled [`SubscriptionSettings`] into a [`SubscriptionConfig`].
+///
+/// Reads the matched main host's certificate chain and checks system-verifiability
+/// using the same logic as `client_config::build`. Returns `Err` (without mutating
+/// any runtime state) on any validation failure, so reload callers can keep the
+/// previous configuration.
+pub(crate) fn resolve(
+    sub: &SubscriptionSettings,
+    settings: &Settings,
+    hosts: &TlsHostsSettings,
+) -> Result<SubscriptionConfig, ValidationError> {
+    validate(sub, settings)?;
+
+    let hostname = sub.hostname.as_deref().unwrap_or("");
+    let host = hosts
+        .main_hosts
+        .iter()
+        .find(|h| h.hostname == hostname)
+        .ok_or_else(|| {
+            ValidationError::Subscription(format!(
+                "subscription hostname '{hostname}' is not present in main_hosts"
+            ))
+        })?;
+
+    let system_verifiable = crate::cert_verification::CertificateVerifier::new()
+        .ok()
+        .map(|verifier| verifier.is_system_verifiable(&host.cert_chain_path, &host.hostname))
+        .unwrap_or(false);
+
+    let certificate = if system_verifiable {
+        None
+    } else {
+        Some(std::fs::read_to_string(&host.cert_chain_path).map_err(|e| {
+            ValidationError::Subscription(format!(
+                "failed to read certificate '{}': {}",
+                host.cert_chain_path, e
+            ))
+        })?)
+    };
+
+    Ok(SubscriptionConfig {
+        enabled: true,
+        path: sub.path.clone(),
+        hostname: sub.hostname.clone().unwrap_or_default(),
+        address: sub.address.clone().unwrap_or_default(),
+        name: sub.name.clone(),
+        dns_upstreams: sub.dns_upstreams.clone(),
+        has_ipv6: settings.ipv6_available,
+        certificate,
+        custom_sni: sub.custom_sni.clone().filter(|s| !s.is_empty()),
+        client_random_prefix: sub.client_random_prefix.clone().filter(|s| !s.is_empty()),
+    })
 }
 
 #[cfg(test)]
