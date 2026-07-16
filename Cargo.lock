@@ -3555,6 +3555,7 @@ dependencies = [
  "rustls-native-certs 0.7.3",
  "rustls-pki-types",
  "serde",
+ "serde_json",
  "smallvec",
  "socket2 0.5.10",
  "tempfile",
