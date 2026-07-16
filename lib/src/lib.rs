@@ -13,6 +13,7 @@ pub mod net_utils;
 pub mod rules;
 pub mod settings;
 pub mod shutdown;
+pub mod subscription;
 pub mod utils;
 
 mod connection_limiter;

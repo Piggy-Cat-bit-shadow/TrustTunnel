@@ -1,0 +1,242 @@
+use crate::settings::{Settings, ValidationError};
+
+/// The `[subscription]` settings parsed from `vpn.toml`.
+///
+/// Served over an existing main TLS host; live connection parameters not listed
+/// here are derived from the endpoint configuration at resolve time.
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+#[cfg_attr(feature = "rt_doc", derive(macros::RuntimeDoc))]
+pub struct SubscriptionSettings {
+    /// Master switch. When `false` the endpoint does not serve subscription data.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Hostname matching a `main_hosts` entry; required when `enabled`.
+    #[serde(default)]
+    pub hostname: Option<String>,
+    /// HTTP path at which the subscription JSON is served.
+    #[serde(default = "SubscriptionSettings::default_path")]
+    pub path: String,
+    /// Endpoint address (`host:port` / `ip:port`) placed in the JSON response.
+    #[serde(default)]
+    pub address: Option<String>,
+    /// Human-readable server label; creation-only hint for clients.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Suggested DNS upstreams; creation-only hint for clients.
+    #[serde(default)]
+    pub dns_upstreams: Vec<String>,
+    /// Custom SNI value for the client's TLS handshake. Omitted from the JSON
+    /// response when unset or empty.
+    #[serde(default)]
+    pub custom_sni: Option<String>,
+    /// TLS client random hex prefix (`prefix[/mask]`) for connection filtering.
+    /// Validated as `hex[/hex]`. Omitted from the JSON when unset or empty.
+    #[serde(default)]
+    pub client_random_prefix: Option<String>,
+}
+
+impl SubscriptionSettings {
+    pub fn default_path() -> String {
+        "/subscription".to_string()
+    }
+}
+
+impl Default for SubscriptionSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            hostname: None,
+            path: Self::default_path(),
+            address: None,
+            name: None,
+            dns_upstreams: Vec::new(),
+            custom_sni: None,
+            client_random_prefix: None,
+        }
+    }
+}
+
+/// Validate the fields that do not depend on TLS hosts.
+///
+/// Returns `Ok(())` only for an **enabled**, fully-specified section. The
+/// hostname-must-match-`main_hosts` and certificate-resolution checks live in
+/// `resolve`, which needs the hosts settings.
+#[allow(dead_code)] // consumed by `resolve` (wired in the serving task)
+pub(crate) fn validate(
+    sub: &SubscriptionSettings,
+    settings: &Settings,
+) -> Result<(), ValidationError> {
+    if !sub.enabled {
+        return Err(ValidationError::Subscription(
+            "subscription is not enabled".to_string(),
+        ));
+    }
+
+    let path = sub.path.as_str();
+    if path.is_empty() || !path.starts_with('/') || path == "/" {
+        return Err(ValidationError::InvalidPath(format!(
+            "subscription path: {path}"
+        )));
+    }
+
+    let address = sub.address.as_deref().unwrap_or("");
+    let has_valid_port = address
+        .rsplit_once(':')
+        .and_then(|(_, port)| port.parse::<u16>().ok())
+        .is_some_and(|port| port != 0);
+    if !has_valid_port {
+        return Err(ValidationError::Subscription(format!(
+            "subscription address is not a valid host:port: {address}"
+        )));
+    }
+
+    if let Some(prefix) = sub
+        .client_random_prefix
+        .as_deref()
+        .filter(|s| !s.is_empty())
+    {
+        let (prefix_part, mask_part) = prefix.split_once('/').unwrap_or((prefix, ""));
+        if hex::decode(prefix_part).is_err() {
+            return Err(ValidationError::Subscription(format!(
+                "subscription client_random_prefix is not valid hex: {prefix}"
+            )));
+        }
+        if !mask_part.is_empty() && hex::decode(mask_part).is_err() {
+            return Err(ValidationError::Subscription(format!(
+                "subscription client_random_prefix mask is not valid hex: {prefix}"
+            )));
+        }
+    }
+
+    check_path_overlap(path, settings.ping_path.as_deref())?;
+    check_path_overlap(path, settings.speedtest_path.as_deref())?;
+    if let Some(reverse_proxy) = settings.reverse_proxy.as_ref() {
+        check_path_overlap(path, Some(reverse_proxy.path_mask.as_str()))?;
+    }
+
+    Ok(())
+}
+
+fn check_path_overlap(path: &str, other: Option<&str>) -> Result<(), ValidationError> {
+    let Some(other) = other else {
+        return Ok(());
+    };
+    if path == other || path.starts_with(other) || other.starts_with(path) {
+        return Err(ValidationError::InvalidPath(format!(
+            "subscription path overlaps an existing path: {path} vs {other}"
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::settings::{Settings, ValidationError};
+
+    fn enabled_sub() -> SubscriptionSettings {
+        SubscriptionSettings {
+            enabled: true,
+            hostname: Some("vpn.example.com".to_string()),
+            path: SubscriptionSettings::default_path(),
+            address: Some("1.2.3.4:443".to_string()),
+            name: None,
+            dns_upstreams: vec![],
+            custom_sni: None,
+            client_random_prefix: None,
+        }
+    }
+
+    #[derive(serde::Deserialize)]
+    struct Wrapper {
+        #[serde(default)]
+        subscription: Option<SubscriptionSettings>,
+    }
+
+    #[test]
+    fn parse_defaults_when_minimal() {
+        let toml = "[subscription]\nenabled = true\n";
+        let w: Wrapper = toml::from_str(toml).unwrap();
+        let sub = w.subscription.expect("section present");
+        assert!(sub.enabled);
+        assert_eq!(sub.path, "/subscription");
+        assert_eq!(sub.hostname, None);
+        assert_eq!(sub.address, None);
+        assert!(sub.dns_upstreams.is_empty());
+    }
+
+    #[test]
+    fn parse_absent_section_is_none() {
+        let w: Wrapper = toml::from_str("").unwrap();
+        assert!(w.subscription.is_none());
+    }
+
+    #[test]
+    fn validate_rejects_disabled() {
+        let mut sub = enabled_sub();
+        sub.enabled = false;
+        let settings = Settings::default();
+        assert!(validate(&sub, &settings).is_err());
+    }
+
+    #[test]
+    fn validate_rejects_root_path() {
+        let mut sub = enabled_sub();
+        sub.path = "/".to_string();
+        let settings = Settings::default();
+        assert!(matches!(
+            validate(&sub, &settings),
+            Err(ValidationError::InvalidPath(_))
+        ));
+    }
+
+    #[test]
+    fn validate_rejects_address_without_port() {
+        let mut sub = enabled_sub();
+        sub.address = Some("1.2.3.4".to_string());
+        let settings = Settings::default();
+        assert!(matches!(
+            validate(&sub, &settings),
+            Err(ValidationError::Subscription(_))
+        ));
+    }
+
+    #[test]
+    fn validate_rejects_invalid_client_random_prefix() {
+        let mut sub = enabled_sub();
+        sub.client_random_prefix = Some("nothex".to_string());
+        let settings = Settings::default();
+        assert!(matches!(
+            validate(&sub, &settings),
+            Err(ValidationError::Subscription(_))
+        ));
+    }
+
+    #[test]
+    fn validate_accepts_valid_client_random_prefix_with_mask() {
+        let mut sub = enabled_sub();
+        sub.client_random_prefix = Some("aabbcc/ff00ff".to_string());
+        let settings = Settings::default();
+        assert!(validate(&sub, &settings).is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_path_overlap_with_ping() {
+        let mut sub = enabled_sub();
+        sub.path = "/ping".to_string();
+
+        let mut settings = Settings::default();
+        settings.ping_path = Some("/ping".to_string());
+
+        assert!(matches!(
+            validate(&sub, &settings),
+            Err(ValidationError::InvalidPath(_))
+        ));
+    }
+
+    #[test]
+    fn validate_accepts_enabled_section() {
+        let settings = Settings::default();
+        assert!(validate(&enabled_sub(), &settings).is_ok());
+    }
+}

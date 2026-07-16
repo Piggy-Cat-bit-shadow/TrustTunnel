@@ -5,6 +5,7 @@ use std::net::{Ipv4Addr, SocketAddr, ToSocketAddrs};
 use std::path::Path;
 use std::time::Duration;
 
+use crate::subscription::SubscriptionSettings;
 use crate::{authentication, rules, utils};
 use authentication::registry_based::Client;
 #[cfg(feature = "rt_doc")]
@@ -25,6 +26,8 @@ pub enum ValidationError {
     SpeedTlsHostInfo(String),
     /// Invalid [`Settings.reverse_proxy`]
     ReverseProxy(String),
+    /// Invalid [`Settings.subscription`]
+    Subscription(String),
     /// Invalid [`Settings.listen_protocols`]
     ListenProtocols(String),
     /// Invalid request path configuration
@@ -45,6 +48,7 @@ impl Debug for ValidationError {
             Self::PingTlsHostInfo(x) => write!(f, "Invalid ping TLS hosts: {}", x),
             Self::SpeedTlsHostInfo(x) => write!(f, "Invalid speedtest TLS hosts: {}", x),
             Self::ReverseProxy(x) => write!(f, "Invalid reverse proxy settings: {}", x),
+            Self::Subscription(x) => write!(f, "Invalid subscription settings: {}", x),
             Self::ListenProtocols(x) => write!(f, "Invalid listen protocols settings: {}", x),
             Self::InvalidPath(x) => write!(f, "Invalid request path: {}", x),
             Self::RulesFile(x) => write!(f, "Invalid rules file: {}", x),
@@ -171,6 +175,12 @@ pub struct Settings {
     /// appended. For now, its value can be either `HTTP1`, or `HTTP3`.
     /// TLS hosts for the reverse proxy channel are configured through [`TlsHostsSettings`].
     pub(crate) reverse_proxy: Option<ReverseProxySettings>,
+    /// The subscription endpoint settings.
+    /// When enabled, the endpoint serves a per-user JSON configuration over an
+    /// existing main TLS host. Hot-reloaded on `SIGHUP` (see
+    /// [`crate::core::Core::reload_subscription_settings`]).
+    #[serde(default)]
+    pub(crate) subscription: Option<SubscriptionSettings>,
     /// The ICMP forwarding settings.
     /// Setting up this feature requires superuser rights on some systems.
     pub(crate) icmp: Option<IcmpSettings>,
@@ -665,6 +675,7 @@ impl Default for Settings {
                 quic: Some(QuicSettings::builder().build()),
             },
             reverse_proxy: None,
+            subscription: None,
             icmp: None,
             metrics: Default::default(),
             rules_engine: Some(rules::RulesEngine::default_allow()),
@@ -926,6 +937,7 @@ impl SettingsBuilder {
                 listen_protocols: Default::default(),
                 clients: Default::default(),
                 reverse_proxy: None,
+                subscription: None,
                 icmp: None,
                 metrics: Default::default(),
                 rules_engine: Some(rules::RulesEngine::default_allow()),
@@ -970,6 +982,12 @@ impl SettingsBuilder {
     /// TLS hosts for the reverse proxy channel are configured through [`TlsHostsSettings`].
     pub fn reverse_proxy(mut self, settings: ReverseProxySettings) -> Self {
         self.settings.reverse_proxy = Some(settings);
+        self
+    }
+
+    /// Set the subscription endpoint settings.
+    pub fn subscription(mut self, settings: SubscriptionSettings) -> Self {
+        self.settings.subscription = Some(settings);
         self
     }
 
