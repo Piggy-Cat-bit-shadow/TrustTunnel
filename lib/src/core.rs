@@ -17,8 +17,8 @@ use crate::tls_demultiplexer::TlsDemux;
 use crate::tls_listener::{TlsAcceptor, TlsListener};
 use crate::tunnel::Tunnel;
 use crate::{
-    authentication, http_ping_handler, http_speedtest_handler, log_id, log_utils, metrics,
-    net_utils, reverse_proxy, rules, settings, tls_demultiplexer, tunnel,
+    authentication, http_ping_handler, http_speedtest_handler, http_subscription_handler, log_id,
+    log_utils, metrics, net_utils, reverse_proxy, rules, settings, tls_demultiplexer, tunnel,
 };
 use socket2::{Domain, Protocol as SockProtocol, SockRef, Socket, Type};
 use std::io;
@@ -72,6 +72,8 @@ impl FatalIoError {
 pub(crate) struct Context {
     pub settings: Arc<Settings>,
     pub authenticator: Option<Arc<dyn authentication::Authenticator>>,
+    pub(crate) subscription:
+        Arc<std::sync::RwLock<Option<crate::subscription::SubscriptionConfig>>>,
     tls_demux: Arc<RwLock<TlsDemux>>,
     pub icmp_forwarder: Option<Arc<IcmpForwarder>>,
     pub shutdown: Arc<Mutex<Shutdown>>,
@@ -134,10 +136,19 @@ impl Core {
             None
         };
 
+        let subscription = match settings.subscription.as_ref() {
+            Some(sub) if sub.enabled => Some(
+                crate::subscription::resolve(sub, &settings, &tls_hosts_settings)
+                    .map_err(Error::SettingsValidation)?,
+            ),
+            _ => None,
+        };
+
         Ok(Self {
             context: Arc::new(Context {
                 settings: settings.clone(),
                 authenticator,
+                subscription: Arc::new(std::sync::RwLock::new(subscription)),
                 tls_demux: Arc::new(RwLock::new(
                     TlsDemux::new(&settings, &tls_hosts_settings)
                         .map_err(|e| Error::TlsDemultiplexer(e.to_string()))?,
@@ -560,6 +571,24 @@ impl Core {
                 )
                 .await
             }
+            net_utils::Channel::Subscription => {
+                http_subscription_handler::listen(
+                    context.clone(),
+                    match Self::make_tcp_http_codec(
+                        tls_connection_meta.protocol,
+                        core_settings,
+                        stream,
+                        client_id.clone(),
+                    ) {
+                        Ok(x) => x,
+                        Err(e) => {
+                            return Err((client_id, format!("Failed to create HTTP codec: {}", e)))
+                        }
+                    },
+                    client_id,
+                )
+                .await
+            }
         }
 
         Ok(())
@@ -641,6 +670,14 @@ impl Core {
                     context.clone(),
                     Box::new(Http3Codec::new(socket, client_id.clone())),
                     sni,
+                    client_id,
+                )
+                .await
+            }
+            net_utils::Channel::Subscription => {
+                http_subscription_handler::listen(
+                    context.clone(),
+                    Box::new(Http3Codec::new(socket, client_id.clone())),
                     client_id,
                 )
                 .await
@@ -778,6 +815,7 @@ impl Default for Context {
         Self {
             settings: settings.clone(),
             authenticator: None,
+            subscription: Arc::new(std::sync::RwLock::new(None)),
             tls_demux: Arc::new(RwLock::new(
                 TlsDemux::new(&settings, &settings::TlsHostsSettings::default()).unwrap(),
             )),

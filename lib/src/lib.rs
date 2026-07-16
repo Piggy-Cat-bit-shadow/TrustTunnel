@@ -32,6 +32,7 @@ mod http_forwarded_stream;
 mod http_icmp_codec;
 mod http_ping_handler;
 mod http_speedtest_handler;
+mod http_subscription_handler;
 mod http_udp_codec;
 mod icmp_forwarder;
 mod icmp_utils;
