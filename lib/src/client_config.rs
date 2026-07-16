@@ -15,6 +15,7 @@ pub fn build(
     hostsettings: &TlsHostsSettings,
     custom_sni: Option<String>,
     client_random_prefix: Option<String>,
+    tls_profile: String,
     name: Option<String>,
     dns_upstreams: Vec<String>,
 ) -> ClientConfig {
@@ -49,6 +50,7 @@ pub fn build(
         certificate,
         cert_is_system_verifiable,
         upstream_protocol: "http2".into(),
+        tls_profile,
         anti_dpi: false,
         name: name.unwrap_or_default(),
         dns_upstreams,
@@ -83,6 +85,8 @@ pub struct ClientConfig {
     cert_is_system_verifiable: bool,
     /// Protocol to be used to communicate with the endpoint [http2, http3]
     upstream_protocol: String,
+    /// TLS ClientHello fingerprint to mimic [chrome, safari, firefox, okhttp, openssl, default]
+    tls_profile: String,
     /// Is anti-DPI measures should be enabled
     anti_dpi: bool,
     /// Human-readable server display name
@@ -109,6 +113,7 @@ impl ClientConfig {
             doc["certificate"] = value(&self.certificate);
         }
         doc["upstream_protocol"] = value(&self.upstream_protocol);
+        doc["tls_profile"] = value(&self.tls_profile);
         doc["anti_dpi"] = value(self.anti_dpi);
         if !self.name.is_empty() {
             doc["name"] = value(&self.name);
@@ -122,7 +127,7 @@ impl ClientConfig {
 
     /// Generate a deep-link URI (tt://?) for this client configuration.
     pub fn compose_deeplink(&self) -> std::io::Result<String> {
-        use trusttunnel_deeplink::{DeepLinkConfig, Protocol};
+        use trusttunnel_deeplink::{DeepLinkConfig, Protocol, TlsProfile};
 
         // Convert certificate from PEM to DER if needed
         let certificate = if !self.cert_is_system_verifiable && !self.certificate.is_empty() {
@@ -137,6 +142,12 @@ impl ClientConfig {
         // Parse protocol
         let upstream_protocol: Protocol = self
             .upstream_protocol
+            .parse()
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+
+        // Parse TLS profile
+        let tls_profile: TlsProfile = self
+            .tls_profile
             .parse()
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
 
@@ -160,6 +171,7 @@ impl ClientConfig {
             skip_verification: self.skip_verification,
             certificate,
             upstream_protocol,
+            tls_profile,
             anti_dpi: self.anti_dpi,
             name: if self.name.is_empty() {
                 None
@@ -210,6 +222,9 @@ certificate = ""
 upstream_protocol = ""
 
 {}
+tls_profile = ""
+
+{}
 anti_dpi = false
 
 {}
@@ -228,6 +243,7 @@ dns_upstreams = []
         ClientConfig::doc_skip_verification().to_toml_comment(),
         ClientConfig::doc_certificate().to_toml_comment(),
         ClientConfig::doc_upstream_protocol().to_toml_comment(),
+        ClientConfig::doc_tls_profile().to_toml_comment(),
         ClientConfig::doc_anti_dpi().to_toml_comment(),
         ClientConfig::doc_name().to_toml_comment(),
         ClientConfig::doc_dns_upstreams().to_toml_comment(),
@@ -251,6 +267,7 @@ mod tests {
                 certificate,
                 cert_is_system_verifiable,
                 upstream_protocol: "http2".into(),
+                tls_profile: "chrome".into(),
                 anti_dpi: false,
                 name: String::new(),
                 dns_upstreams: vec![],
@@ -347,6 +364,44 @@ omxU7kknZApM\n\
             2,
             "Deep-link DER should contain both certs from the chain"
         );
+    }
+
+    #[test]
+    fn test_tls_profile_flows_through_toml_and_deeplink() {
+        let mut config = ClientConfig::test_config(TWO_CERT_PEM_CHAIN.to_string(), true);
+        config.tls_profile = "safari".into();
+
+        // TOML output carries the chosen profile.
+        let toml_output = config.compose_toml();
+        let doc: Document = toml_output.parse().unwrap();
+        assert_eq!(doc["tls_profile"].as_str().unwrap(), "safari");
+
+        // Deep-link encodes it and it decodes back to the same profile.
+        let uri = config.compose_deeplink().unwrap();
+        let decoded = trusttunnel_deeplink::decode(&uri).unwrap();
+        assert_eq!(
+            decoded.tls_profile,
+            trusttunnel_deeplink::TlsProfile::Safari
+        );
+    }
+
+    #[test]
+    fn test_default_chrome_profile_omitted_from_deeplink() {
+        // Chrome is the default, so it must not add a TLS-profile TLV to the link.
+        let chrome = ClientConfig::test_config(TWO_CERT_PEM_CHAIN.to_string(), true);
+        let mut none = ClientConfig::test_config(TWO_CERT_PEM_CHAIN.to_string(), true);
+        none.tls_profile = "chrome".into();
+        assert_eq!(
+            chrome.compose_deeplink().unwrap(),
+            none.compose_deeplink().unwrap()
+        );
+    }
+
+    #[test]
+    fn test_invalid_tls_profile_rejected_by_deeplink() {
+        let mut config = ClientConfig::test_config(TWO_CERT_PEM_CHAIN.to_string(), true);
+        config.tls_profile = "edge".into();
+        assert!(config.compose_deeplink().is_err());
     }
 
     #[test]

@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `tls_profile` field selecting the TLS ClientHello fingerprint to mimic (`chrome`, `safari`, `firefox`, `okhttp`, `openssl`, `default`; defaults to `chrome`). Supported by the deep-link library, the reference Python scripts, and exported client configs.
+- `--tls-profile` option for `trusttunnel_endpoint -c` to choose the exported client's `tls_profile` (defaults to `chrome`).
+
 ### Changed
 
 ### Deprecated

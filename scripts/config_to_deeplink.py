@@ -85,15 +85,26 @@ TAG_ANTI_DPI           = 0x0A
 TAG_CLIENT_RANDOM_PREFIX = 0x0B
 TAG_NAME                 = 0x0C
 TAG_DNS_UPSTREAMS        = 0x0D
+TAG_TLS_PROFILE          = 0x0E
 
 CURRENT_VERSION = 1
 
 PROTOCOL_MAP = {"http2": 0x01, "http3": 0x02}
 
+TLS_PROFILE_MAP = {
+    "chrome": 0x01,
+    "safari": 0x02,
+    "firefox": 0x03,
+    "okhttp": 0x04,
+    "openssl": 0x05,
+    "default": 0x06,
+}
+
 DEFAULTS = {
     "has_ipv6": True,
     "skip_verification": False,
     "upstream_protocol": "http2",
+    "tls_profile": "chrome",
     "anti_dpi": False,
 }
 
@@ -159,6 +170,13 @@ def encode_config(cfg: dict) -> bytes:
         if proto not in PROTOCOL_MAP:
             raise ValueError(f"unknown upstream_protocol: {proto}")
         buf += tlv(TAG_UPSTREAM_PROTOCOL, bytes([PROTOCOL_MAP[proto]]))
+
+    # tls_profile (omit if default)
+    profile = cfg.get("tls_profile")
+    if profile and profile != DEFAULTS["tls_profile"]:
+        if profile not in TLS_PROFILE_MAP:
+            raise ValueError(f"unknown tls_profile: {profile}")
+        buf += tlv(TAG_TLS_PROFILE, bytes([TLS_PROFILE_MAP[profile]]))
 
     # name (optional)
     if "name" in cfg and cfg["name"]:

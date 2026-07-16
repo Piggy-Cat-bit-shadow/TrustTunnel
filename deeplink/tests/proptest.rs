@@ -1,5 +1,5 @@
 use proptest::prelude::*;
-use trusttunnel_deeplink::{decode, encode, DeepLinkConfig, Protocol};
+use trusttunnel_deeplink::{decode, encode, DeepLinkConfig, Protocol, TlsProfile};
 
 fn arbitrary_address_string() -> impl Strategy<Value = String> {
     prop_oneof![
@@ -11,6 +11,17 @@ fn arbitrary_address_string() -> impl Strategy<Value = String> {
 
 fn arbitrary_protocol() -> impl Strategy<Value = Protocol> {
     prop_oneof![Just(Protocol::Http2), Just(Protocol::Http3),]
+}
+
+fn arbitrary_tls_profile() -> impl Strategy<Value = TlsProfile> {
+    prop_oneof![
+        Just(TlsProfile::Chrome),
+        Just(TlsProfile::Safari),
+        Just(TlsProfile::Firefox),
+        Just(TlsProfile::Okhttp),
+        Just(TlsProfile::Openssl),
+        Just(TlsProfile::Default),
+    ]
 }
 
 fn arbitrary_hex_string() -> impl Strategy<Value = Option<String>> {
@@ -34,6 +45,7 @@ fn arbitrary_config() -> impl Strategy<Value = DeepLinkConfig> {
         ),
         prop::option::of("[a-z]{3,20}"),
         prop::collection::vec("[a-z0-9:/._-]{5,40}", 0..3),
+        arbitrary_tls_profile(),
     )
         .prop_map(
             |(
@@ -52,6 +64,7 @@ fn arbitrary_config() -> impl Strategy<Value = DeepLinkConfig> {
                 ),
                 name,
                 dns_upstreams,
+                tls_profile,
             )| {
                 DeepLinkConfig {
                     hostname,
@@ -64,6 +77,7 @@ fn arbitrary_config() -> impl Strategy<Value = DeepLinkConfig> {
                     skip_verification,
                     certificate,
                     upstream_protocol,
+                    tls_profile,
                     anti_dpi,
                     name,
                     dns_upstreams,
@@ -87,6 +101,7 @@ proptest! {
         prop_assert_eq!(decoded.skip_verification, config.skip_verification);
         prop_assert_eq!(decoded.certificate, config.certificate);
         prop_assert_eq!(decoded.upstream_protocol, config.upstream_protocol);
+        prop_assert_eq!(decoded.tls_profile, config.tls_profile);
         prop_assert_eq!(decoded.anti_dpi, config.anti_dpi);
         prop_assert_eq!(decoded.name, config.name);
         prop_assert_eq!(decoded.dns_upstreams, config.dns_upstreams);

@@ -1,5 +1,5 @@
 use crate::error::Result;
-use crate::types::{DeepLinkConfig, Protocol, TlvTag, CURRENT_VERSION};
+use crate::types::{DeepLinkConfig, Protocol, TlsProfile, TlvTag, CURRENT_VERSION};
 use crate::varint::encode_varint;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 
@@ -26,6 +26,11 @@ fn encode_bool_field(tag: TlvTag, value: bool) -> Result<Vec<u8>> {
 /// Encode upstream protocol as TLV (1 byte: 0x01 for http2, 0x02 for http3).
 fn encode_protocol_field(protocol: Protocol) -> Result<Vec<u8>> {
     encode_tlv(TlvTag::UpstreamProtocol, &[protocol.as_u8()])
+}
+
+/// Encode TLS profile as TLV (1 byte, see [`TlsProfile`] for the mapping).
+fn encode_tls_profile_field(profile: TlsProfile) -> Result<Vec<u8>> {
+    encode_tlv(TlvTag::TlsProfile, &[profile.as_u8()])
 }
 
 /// Encode a String[] value: each element is a varint length followed by UTF-8 bytes.
@@ -100,6 +105,11 @@ pub fn encode_tlv_payload(config: &DeepLinkConfig) -> Result<Vec<u8>> {
         payload.extend(encode_protocol_field(config.upstream_protocol)?);
     }
 
+    // tls_profile default is Chrome, so only encode if non-default
+    if config.tls_profile != TlsProfile::Chrome {
+        payload.extend(encode_tls_profile_field(config.tls_profile)?);
+    }
+
     // name (optional)
     if let Some(ref name) = config.name {
         payload.extend(encode_string_field(TlvTag::Name, name)?);
@@ -168,6 +178,35 @@ mod tests {
 
         let result_http3 = encode_protocol_field(Protocol::Http3).unwrap();
         assert_eq!(result_http3[2], 0x02); // http3
+    }
+
+    #[test]
+    fn test_encode_tls_profile_field() {
+        let result_safari = encode_tls_profile_field(TlsProfile::Safari).unwrap();
+        assert_eq!(result_safari[0], 0x0E); // TlsProfile tag
+        assert_eq!(result_safari[1], 1); // length
+        assert_eq!(result_safari[2], 0x02); // safari
+
+        let result_default = encode_tls_profile_field(TlsProfile::Default).unwrap();
+        assert_eq!(result_default[2], 0x06); // default
+    }
+
+    #[test]
+    fn test_encode_omits_default_tls_profile() {
+        let config = DeepLinkConfig::builder()
+            .hostname("vpn.example.com".to_string())
+            .addresses(vec!["1.2.3.4:443".to_string()])
+            .username("alice".to_string())
+            .password("secret".to_string())
+            .tls_profile(TlsProfile::Chrome) // default, must be omitted
+            .build()
+            .unwrap();
+
+        let payload = encode_tlv_payload(&config).unwrap();
+        assert!(
+            !payload.contains(&TlvTag::TlsProfile.as_u8()),
+            "default tls_profile must not be encoded"
+        );
     }
 
     #[test]

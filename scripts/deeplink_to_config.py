@@ -57,15 +57,26 @@ TAG_ANTI_DPI           = 0x0A
 TAG_CLIENT_RANDOM_PREFIX = 0x0B
 TAG_NAME                   = 0x0C
 TAG_DNS_UPSTREAMS          = 0x0D
+TAG_TLS_PROFILE            = 0x0E
 
 CURRENT_VERSION = 1
 
 PROTOCOL_RMAP = {0x01: "http2", 0x02: "http3"}
 
+TLS_PROFILE_RMAP = {
+    0x01: "chrome",
+    0x02: "safari",
+    0x03: "firefox",
+    0x04: "okhttp",
+    0x05: "openssl",
+    0x06: "default",
+}
+
 DEFAULTS = {
     "has_ipv6": True,
     "skip_verification": False,
     "upstream_protocol": "http2",
+    "tls_profile": "chrome",
     "anti_dpi": False,
 }
 
@@ -189,6 +200,11 @@ def decode_config(data: bytes) -> dict:
             if proto_byte not in PROTOCOL_RMAP:
                 raise ValueError(f"unknown upstream_protocol byte: 0x{proto_byte:02X}")
             cfg["upstream_protocol"] = PROTOCOL_RMAP[proto_byte]
+        elif tag == TAG_TLS_PROFILE:
+            profile_byte = value[0]
+            if profile_byte not in TLS_PROFILE_RMAP:
+                raise ValueError(f"unknown tls_profile byte: 0x{profile_byte:02X}")
+            cfg["tls_profile"] = TLS_PROFILE_RMAP[profile_byte]
         elif tag == TAG_ANTI_DPI:
             cfg["anti_dpi"] = value[0] != 0
         elif tag == TAG_CLIENT_RANDOM_PREFIX:
@@ -244,6 +260,8 @@ _FIELD_ORDER: list[tuple[str, str]] = [
                           "# If not specified, the endpoint certificate is verified "
                           "using the system storage."),
     ("upstream_protocol", "Protocol to be used to communicate with the endpoint [http2, http3]"),
+    ("tls_profile",       "TLS ClientHello fingerprint to mimic "
+                          "[chrome, safari, firefox, okhttp, openssl, default]"),
     ("anti_dpi",          "Is anti-DPI measures should be enabled"),
     ("name",              "Human-readable server display name"),
     ("dns_upstreams",     "DNS upstreams to use when connected to this endpoint"),

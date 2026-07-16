@@ -20,6 +20,7 @@ pub enum TlvTag {
     ClientRandomPrefix = 0x0B,
     Name = 0x0C,
     DnsUpstreams = 0x0D,
+    TlsProfile = 0x0E,
 }
 
 impl TlvTag {
@@ -43,6 +44,7 @@ impl TlvTag {
             0x0B => Some(TlvTag::ClientRandomPrefix),
             0x0C => Some(TlvTag::Name),
             0x0D => Some(TlvTag::DnsUpstreams),
+            0x0E => Some(TlvTag::TlsProfile),
             _ => None,
         }
     }
@@ -97,6 +99,74 @@ impl fmt::Display for Protocol {
     }
 }
 
+/// TLS ClientHello fingerprint profile to mimic on the wire.
+///
+/// The string form (see [`fmt::Display`]/[`FromStr`]) matches the `tls_profile`
+/// values accepted by the TrustTunnel client endpoint configuration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Default)]
+pub enum TlsProfile {
+    #[default]
+    Chrome = 0x01,
+    Safari = 0x02,
+    Firefox = 0x03,
+    Okhttp = 0x04,
+    Openssl = 0x05,
+    Default = 0x06,
+}
+
+impl TlsProfile {
+    pub fn as_u8(self) -> u8 {
+        self as u8
+    }
+
+    pub fn from_u8(value: u8) -> Result<Self> {
+        match value {
+            0x01 => Ok(TlsProfile::Chrome),
+            0x02 => Ok(TlsProfile::Safari),
+            0x03 => Ok(TlsProfile::Firefox),
+            0x04 => Ok(TlsProfile::Okhttp),
+            0x05 => Ok(TlsProfile::Openssl),
+            0x06 => Ok(TlsProfile::Default),
+            _ => Err(DeepLinkError::InvalidTlsProfile(value)),
+        }
+    }
+}
+
+impl FromStr for TlsProfile {
+    type Err = DeepLinkError;
+
+    fn from_str(s: &str) -> Result<Self> {
+        match s {
+            "chrome" => Ok(TlsProfile::Chrome),
+            "safari" => Ok(TlsProfile::Safari),
+            "firefox" => Ok(TlsProfile::Firefox),
+            "okhttp" => Ok(TlsProfile::Okhttp),
+            "openssl" => Ok(TlsProfile::Openssl),
+            "default" => Ok(TlsProfile::Default),
+            _ => Err(DeepLinkError::InvalidAddress(format!(
+                "unknown tls_profile: {}",
+                s
+            ))),
+        }
+    }
+}
+
+impl fmt::Display for TlsProfile {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TlsProfile::Chrome => write!(f, "chrome"),
+            TlsProfile::Safari => write!(f, "safari"),
+            TlsProfile::Firefox => write!(f, "firefox"),
+            TlsProfile::Okhttp => write!(f, "okhttp"),
+            TlsProfile::Openssl => write!(f, "openssl"),
+            TlsProfile::Default => write!(f, "default"),
+        }
+    }
+}
+
 pub const CURRENT_VERSION: u64 = 1;
 
 /// TrustTunnel deep-link configuration.
@@ -116,6 +186,7 @@ pub struct DeepLinkConfig {
     pub skip_verification: bool,
     pub certificate: Option<Vec<u8>>,
     pub upstream_protocol: Protocol,
+    pub tls_profile: TlsProfile,
     pub anti_dpi: bool,
     pub name: Option<String>,
     pub dns_upstreams: Vec<String>,
@@ -158,6 +229,7 @@ pub struct DeepLinkConfigBuilder {
     skip_verification: Option<bool>,
     certificate: Option<Vec<u8>>,
     upstream_protocol: Option<Protocol>,
+    tls_profile: Option<TlsProfile>,
     anti_dpi: Option<bool>,
     name: Option<String>,
     dns_upstreams: Option<Vec<String>>,
@@ -206,6 +278,11 @@ impl DeepLinkConfigBuilder {
 
     pub fn upstream_protocol(mut self, upstream_protocol: Protocol) -> Self {
         self.upstream_protocol = Some(upstream_protocol);
+        self
+    }
+
+    pub fn tls_profile(mut self, tls_profile: TlsProfile) -> Self {
+        self.tls_profile = Some(tls_profile);
         self
     }
 
@@ -261,6 +338,7 @@ impl DeepLinkConfigBuilder {
             skip_verification: self.skip_verification.unwrap_or(false),
             certificate: self.certificate,
             upstream_protocol: self.upstream_protocol.unwrap_or_default(),
+            tls_profile: self.tls_profile.unwrap_or_default(),
             anti_dpi: self.anti_dpi.unwrap_or(false),
             name: self.name,
             dns_upstreams: self.dns_upstreams.unwrap_or_default(),
@@ -300,6 +378,51 @@ mod tests {
     fn test_protocol_display() {
         assert_eq!(Protocol::Http2.to_string(), "http2");
         assert_eq!(Protocol::Http3.to_string(), "http3");
+    }
+
+    #[test]
+    fn test_tls_profile_conversions() {
+        assert_eq!(TlsProfile::Chrome.as_u8(), 0x01);
+        assert_eq!(TlsProfile::Default.as_u8(), 0x06);
+        assert_eq!(TlsProfile::from_u8(0x01).unwrap(), TlsProfile::Chrome);
+        assert_eq!(TlsProfile::from_u8(0x05).unwrap(), TlsProfile::Openssl);
+        assert!(TlsProfile::from_u8(0x00).is_err());
+        assert!(TlsProfile::from_u8(0xFF).is_err());
+    }
+
+    #[test]
+    fn test_tls_profile_from_str() {
+        assert_eq!("chrome".parse::<TlsProfile>().unwrap(), TlsProfile::Chrome);
+        assert_eq!("safari".parse::<TlsProfile>().unwrap(), TlsProfile::Safari);
+        assert_eq!(
+            "firefox".parse::<TlsProfile>().unwrap(),
+            TlsProfile::Firefox
+        );
+        assert_eq!("okhttp".parse::<TlsProfile>().unwrap(), TlsProfile::Okhttp);
+        assert_eq!(
+            "openssl".parse::<TlsProfile>().unwrap(),
+            TlsProfile::Openssl
+        );
+        assert_eq!(
+            "default".parse::<TlsProfile>().unwrap(),
+            TlsProfile::Default
+        );
+        assert!("edge".parse::<TlsProfile>().is_err());
+    }
+
+    #[test]
+    fn test_tls_profile_display() {
+        assert_eq!(TlsProfile::Chrome.to_string(), "chrome");
+        assert_eq!(TlsProfile::Safari.to_string(), "safari");
+        assert_eq!(TlsProfile::Firefox.to_string(), "firefox");
+        assert_eq!(TlsProfile::Okhttp.to_string(), "okhttp");
+        assert_eq!(TlsProfile::Openssl.to_string(), "openssl");
+        assert_eq!(TlsProfile::Default.to_string(), "default");
+    }
+
+    #[test]
+    fn test_tls_profile_default_is_chrome() {
+        assert_eq!(TlsProfile::default(), TlsProfile::Chrome);
     }
 
     #[test]
@@ -353,6 +476,7 @@ mod tests {
             skip_verification: false,
             certificate: None,
             upstream_protocol: Protocol::Http2,
+            tls_profile: TlsProfile::Chrome,
             anti_dpi: false,
             client_random_prefix: None,
             name: None,

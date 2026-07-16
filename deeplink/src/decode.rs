@@ -1,5 +1,5 @@
 use crate::error::{DeepLinkError, Result};
-use crate::types::{DeepLinkConfig, Protocol, TlvTag, CURRENT_VERSION};
+use crate::types::{DeepLinkConfig, Protocol, TlsProfile, TlvTag, CURRENT_VERSION};
 use crate::varint::decode_varint;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 
@@ -50,6 +50,16 @@ fn decode_protocol(data: &[u8]) -> Result<Protocol> {
         ));
     }
     Protocol::from_u8(data[0])
+}
+
+/// Decode a TLS profile from a single byte.
+fn decode_tls_profile(data: &[u8]) -> Result<TlsProfile> {
+    if data.len() != 1 {
+        return Err(DeepLinkError::InvalidTlsProfile(
+            data.first().copied().unwrap_or(0xFF),
+        ));
+    }
+    TlsProfile::from_u8(data[0])
 }
 
 /// TLV parser with stateful offset tracking.
@@ -118,6 +128,7 @@ pub fn decode_tlv_payload(payload: &[u8]) -> Result<DeepLinkConfig> {
     let mut skip_verification: bool = false; // default
     let mut certificate: Option<Vec<u8>> = None;
     let mut upstream_protocol: Protocol = Protocol::Http2; // default
+    let mut tls_profile: TlsProfile = TlsProfile::Chrome; // default
     let mut anti_dpi: bool = false; // default
     let mut client_random_prefix: Option<String> = None;
     let mut name: Option<String> = None;
@@ -169,6 +180,9 @@ pub fn decode_tlv_payload(payload: &[u8]) -> Result<DeepLinkConfig> {
             TlvTag::UpstreamProtocol => {
                 upstream_protocol = decode_protocol(&value)?;
             }
+            TlvTag::TlsProfile => {
+                tls_profile = decode_tls_profile(&value)?;
+            }
             TlvTag::AntiDpi => {
                 anti_dpi = decode_bool(&value)?;
             }
@@ -218,6 +232,7 @@ pub fn decode_tlv_payload(payload: &[u8]) -> Result<DeepLinkConfig> {
         skip_verification,
         certificate,
         upstream_protocol,
+        tls_profile,
         anti_dpi,
         name,
         dns_upstreams,
@@ -277,6 +292,15 @@ mod tests {
         assert_eq!(decode_protocol(&[0x01]).unwrap(), Protocol::Http2);
         assert_eq!(decode_protocol(&[0x02]).unwrap(), Protocol::Http3);
         assert!(decode_protocol(&[0x03]).is_err());
+    }
+
+    #[test]
+    fn test_decode_tls_profile() {
+        assert_eq!(decode_tls_profile(&[0x01]).unwrap(), TlsProfile::Chrome);
+        assert_eq!(decode_tls_profile(&[0x06]).unwrap(), TlsProfile::Default);
+        assert!(decode_tls_profile(&[0x00]).is_err());
+        assert!(decode_tls_profile(&[0x07]).is_err());
+        assert!(decode_tls_profile(&[0x01, 0x02]).is_err()); // Wrong length
     }
 
     #[test]

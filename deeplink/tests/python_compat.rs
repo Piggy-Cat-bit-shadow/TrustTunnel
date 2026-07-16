@@ -1,5 +1,5 @@
 use std::process::Command;
-use trusttunnel_deeplink::{decode, encode, DeepLinkConfig, Protocol};
+use trusttunnel_deeplink::{decode, encode, DeepLinkConfig, Protocol, TlsProfile};
 
 /// Get the workspace root directory
 fn workspace_root() -> std::path::PathBuf {
@@ -277,6 +277,45 @@ fn test_roundtrip_through_both_implementations() {
     assert_eq!(
         decoded_config.upstream_protocol,
         original_config.upstream_protocol
+    );
+}
+
+#[test]
+fn test_tls_profile_matches_python() {
+    let toml = r#"
+hostname = "vpn.example.com"
+addresses = ["1.2.3.4:443"]
+username = "alice"
+password = "secret123"
+tls_profile = "firefox"
+"#;
+
+    let config = DeepLinkConfig::builder()
+        .hostname("vpn.example.com".to_string())
+        .addresses(vec!["1.2.3.4:443".to_string()])
+        .username("alice".to_string())
+        .password("secret123".to_string())
+        .tls_profile(TlsProfile::Firefox)
+        .build()
+        .unwrap();
+
+    let rust_uri = encode(&config).unwrap();
+    let python_uri = python_encode(toml);
+
+    assert_eq!(
+        rust_uri, python_uri,
+        "Rust and Python encoders produced different URIs for tls_profile"
+    );
+
+    // Rust decodes the Python-encoded URI back to the same profile.
+    let rust_config = decode(&python_uri).expect("Failed to decode Python-encoded URI");
+    assert_eq!(rust_config.tls_profile, TlsProfile::Firefox);
+
+    // Python decoder emits the profile in the generated TOML.
+    let python_decoded = python_decode(&rust_uri);
+    assert!(
+        python_decoded.contains("tls_profile = \"firefox\""),
+        "Python decoder failed on tls_profile"
     );
 }
 

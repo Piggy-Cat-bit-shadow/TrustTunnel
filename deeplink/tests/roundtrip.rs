@@ -1,4 +1,4 @@
-use trusttunnel_deeplink::{decode, encode, DeepLinkConfig, DeepLinkError, Protocol};
+use trusttunnel_deeplink::{decode, encode, DeepLinkConfig, DeepLinkError, Protocol, TlsProfile};
 
 #[test]
 fn test_roundtrip_minimal_config() {
@@ -335,6 +335,37 @@ fn test_roundtrip_without_new_optional_fields() {
 
     assert_eq!(decoded.name, None);
     assert!(decoded.dns_upstreams.is_empty());
+    // tls_profile defaults to Chrome when absent from the link
+    assert_eq!(decoded.tls_profile, TlsProfile::Chrome);
+}
+
+#[test]
+fn test_roundtrip_all_tls_profiles() {
+    for profile in [
+        TlsProfile::Chrome,
+        TlsProfile::Safari,
+        TlsProfile::Firefox,
+        TlsProfile::Okhttp,
+        TlsProfile::Openssl,
+        TlsProfile::Default,
+    ] {
+        let config = DeepLinkConfig::builder()
+            .hostname("vpn.example.com".to_string())
+            .addresses(vec!["1.2.3.4:443".to_string()])
+            .username("user".to_string())
+            .password("pass".to_string())
+            .tls_profile(profile)
+            .build()
+            .unwrap();
+
+        let uri = encode(&config).unwrap();
+        let decoded = decode(&uri).unwrap();
+
+        assert_eq!(
+            decoded.tls_profile, profile,
+            "roundtrip failed for {profile}"
+        );
+    }
 }
 
 #[test]

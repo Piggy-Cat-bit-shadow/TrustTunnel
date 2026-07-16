@@ -67,6 +67,7 @@ The `DeepLinkConfig` struct supports the following fields:
 | `skip_verification` | `bool`            | No       | `false` | Skip certificate verification        |
 | `certificate`       | `Option<Vec<u8>>` | No       | None    | DER-encoded certificate chain        |
 | `upstream_protocol` | `Protocol`        | No       | `Http2` | Upstream protocol (HTTP/2 or HTTP/3) |
+| `tls_profile`       | `TlsProfile`      | No       | `Chrome`| TLS ClientHello fingerprint to mimic |
 | `anti_dpi`          | `bool`            | No       | `false` | Anti-DPI measures enabled            |
 
 ## Advanced Usage
@@ -87,7 +88,7 @@ let pem_again = der_to_pem(&der).unwrap();
 ### Builder Pattern
 
 ```rust
-use trusttunnel_deeplink::{DeepLinkConfig, Protocol};
+use trusttunnel_deeplink::{DeepLinkConfig, Protocol, TlsProfile};
 
 let config = DeepLinkConfig::builder()
     .hostname("vpn.example.com".to_string())
@@ -97,6 +98,7 @@ let config = DeepLinkConfig::builder()
     .custom_sni(Some("cdn.example.org".to_string()))
     .has_ipv6(false)
     .upstream_protocol(Protocol::Http3)
+    .tls_profile(TlsProfile::Safari)
     .anti_dpi(true)
     .build()
     .unwrap();

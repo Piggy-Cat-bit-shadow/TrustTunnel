@@ -53,6 +53,7 @@ The endpoint binary accepts the following command line arguments:
 | `<tls_hosts_settings>` | - | **Required.** Path to TLS hosts settings file | - |
 | `--client_config` | `-c` | Print endpoint config for specified client and exit | - |
 | `--address` | `-a` | Endpoint address to add to client config (requires `-c`). Accepts `ip`, `ip:port`, `domain`, or `domain:port`. | - |
+| `--tls-profile` | - | TLS ClientHello fingerprint the client should mimic (requires `-c`). One of `chrome`, `safari`, `firefox`, `okhttp`, `openssl`, `default`. | `chrome` |
 | `--client-random-prefix` | `-r` | Use an explicit `client_random_prefix` in the exported client config (requires `-c`). | - |
 | `--generate-client-random-prefix` | - | Generate a new `client_random_prefix`, append a matching allow rule to `rules.toml`, and use it in the exported client config (requires `-c`). | - |
 | `--prefix-length` | - | Length in bytes for generated `client_random_prefix` values (requires `--generate-client-random-prefix`). | `4` |
@@ -82,6 +83,10 @@ The endpoint binary accepts the following command line arguments:
 
 # Export client configuration with domain name and explicit port
 ./trusttunnel_endpoint vpn.toml hosts.toml -c username -a vpn.example.com:443
+
+# Export client configuration selecting the TLS fingerprint to mimic
+./trusttunnel_endpoint vpn.toml hosts.toml -c username -a vpn.example.com \
+    --tls-profile firefox
 
 # Export client configuration with an explicit client_random_prefix
 ./trusttunnel_endpoint vpn.toml hosts.toml -c username -a vpn.example.com \

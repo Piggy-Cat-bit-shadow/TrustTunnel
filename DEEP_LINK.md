@@ -5,7 +5,10 @@ endpoint configurations between devices and applications.
 
 Status: version 1
 
-- version 1: Added fields for version, server display name, and DNS upstreams.
+- version 1: Added fields for version, server display name, DNS upstreams, and
+  TLS ClientHello fingerprint profile (`tls_profile`, tag `0x0E`). Because the
+  field is optional and defaults to `chrome`, it is a forward-compatible
+  addition within version 1: parsers that predate it simply ignore the new tag.
 - draft 2: Changed format to tt://? to use case-sensitive URL part (query) instead of case-insensitive (host)
 - draft 1: Initial specification
 
@@ -93,6 +96,7 @@ in one or two bytes.
 | `0x0B` | `client_random_prefix` | String | UTF-8 hex-encoded string in the following format: `prefix[/mask]` | no |
 | `0x0C` | `name` | String | Human-readable server name for display in the client UI | no |
 | `0x0D` | `dns_upstreams` | String[] | List of DNS upstream addresses (e.g. `"1.1.1.1"`, `"tls://dns.example.com"`, `"https://dns.example.com/dns-query"`) | no |
+| `0x0E` | `tls_profile` | VarInt | TLS ClientHello fingerprint to mimic: `0x01` = `chrome`, `0x02` = `safari`, `0x03` = `firefox`, `0x04` = `okhttp`, `0x05` = `openssl`, `0x06` = `default` | no (default `chrome`) |
 
 ### Encoding Rules
 

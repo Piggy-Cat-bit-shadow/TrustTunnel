@@ -342,6 +342,10 @@ fn print_setup_complete_summary(
         lib_settings_path, hosts_settings_path
     );
     println!("   where <address> is ip, ip:port, domain, or domain:port");
+    println!(
+        "   add --tls-profile <chrome|safari|firefox|okhttp|openssl|default> \
+         to pick the client's TLS fingerprint (default: chrome)"
+    );
     println!();
     println!("3. Use the exported config with:");
     println!("   • TrustTunnel CLI Client - Pass to setup_wizard --endpoint_config");

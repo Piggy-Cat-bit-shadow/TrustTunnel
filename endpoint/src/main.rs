@@ -23,6 +23,7 @@ const TLS_HOSTS_SETTINGS_PARAM_NAME: &str = "tls_hosts_settings";
 const CLIENT_CONFIG_PARAM_NAME: &str = "client_config";
 const ADDRESS_PARAM_NAME: &str = "address";
 const CUSTOM_SNI_PARAM_NAME: &str = "custom_sni";
+const TLS_PROFILE_PARAM_NAME: &str = "tls_profile";
 const CLIENT_RANDOM_PREFIX_PARAM_NAME: &str = "client_random_prefix";
 const GENERATE_CLIENT_RANDOM_PREFIX_PARAM_NAME: &str = "generate_client_random_prefix";
 const PREFIX_LENGTH_PARAM_NAME: &str = "prefix_length";
@@ -172,6 +173,13 @@ fn main() {
                 .value_parser(["toml", "deeplink"])
                 .default_value("deeplink")
                 .help("Output format for client configuration: 'deeplink' produces tt://? URI, 'toml' produces traditional config file"),
+            clap::Arg::new(TLS_PROFILE_PARAM_NAME)
+                .action(clap::ArgAction::Set)
+                .requires(CLIENT_CONFIG_PARAM_NAME)
+                .long("tls-profile")
+                .value_parser(["chrome", "safari", "firefox", "okhttp", "openssl", "default"])
+                .default_value("chrome")
+                .help("TLS ClientHello fingerprint the client should mimic: 'chrome', 'safari', 'firefox', 'okhttp', 'openssl', or 'default'."),
             clap::Arg::new(NAME_PARAM_NAME)
                 .action(clap::ArgAction::Set)
                 .requires(CLIENT_CONFIG_PARAM_NAME)
@@ -437,6 +445,11 @@ fn main() {
             .get_many::<String>(DNS_UPSTREAM_PARAM_NAME)
             .map(|vals| vals.cloned().collect())
             .unwrap_or_default();
+        // clap enforces the allowed value set and supplies the "chrome" default.
+        let tls_profile = args
+            .get_one::<String>(TLS_PROFILE_PARAM_NAME)
+            .cloned()
+            .unwrap_or_else(|| "chrome".to_string());
 
         let client_config = client_config::build(
             username,
@@ -445,6 +458,7 @@ fn main() {
             &tls_hosts_settings,
             custom_sni,
             client_random_prefix,
+            tls_profile,
             name,
             dns_upstreams,
         );

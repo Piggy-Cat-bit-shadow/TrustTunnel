@@ -264,13 +264,16 @@ You can also provide additional options:
 - `--dns-upstream <dns_upstream>`: Specify a DNS upstream for the client. Can be an IP address
   or a secure DNS URI (e.g., `tls://1.1.1.1`, `https://dns.google/dns-query`).
   This flag can be used multiple times to provide a list of DNS upstreams.
+- `--tls-profile <profile>`: Choose the TLS ClientHello fingerprint the client should mimic.
+  One of `chrome` (default), `safari`, `firefox`, `okhttp`, `openssl`, or `default`.
 
-Example with custom name and DNS upstreams:
+Example with custom name, DNS upstreams, and TLS profile:
 
 ```shell
 ./trusttunnel_endpoint vpn.toml hosts.toml -c <client_name> -a <address> \
     --name "My Secure VPN" \
-    --dns-upstream 1.1.1.1 --dns-upstream tls://8.8.8.8
+    --dns-upstream 1.1.1.1 --dns-upstream tls://8.8.8.8 \
+    --tls-profile safari
 ```
 
 When `--generate-client-random-prefix` is used, the endpoint also appends an
