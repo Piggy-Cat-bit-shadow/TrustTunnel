@@ -137,11 +137,11 @@ impl Core {
         };
 
         let subscription = match settings.subscription.as_ref() {
-            Some(sub) if sub.enabled => Some(
+            Some(sub) => Some(
                 crate::subscription::resolve(sub, &settings, &tls_hosts_settings)
                     .map_err(Error::SettingsValidation)?,
             ),
-            _ => None,
+            None => None,
         };
 
         Ok(Self {
@@ -254,12 +254,12 @@ impl Core {
         hosts: &settings::TlsHostsSettings,
     ) -> io::Result<()> {
         let resolved = match sub {
-            Some(sub) if sub.enabled => Some(
+            Some(sub) => Some(
                 crate::subscription::resolve(&sub, &self.context.settings, hosts).map_err(|e| {
                     io::Error::other(format!("Subscription resolve failure: {:?}", e))
                 })?,
             ),
-            _ => None,
+            None => None,
         };
 
         let mut store = self.context.subscription.write().unwrap();

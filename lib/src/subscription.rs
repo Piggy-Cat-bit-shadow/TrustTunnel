@@ -57,20 +57,10 @@ impl Default for SubscriptionSettings {
 }
 
 /// Validate the fields that do not depend on TLS hosts.
-///
-/// Returns `Ok(())` only for an **enabled**, fully-specified section. The
-/// hostname-must-match-`main_hosts` and certificate-resolution checks live in
-/// `resolve`, which needs the hosts settings.
 pub(crate) fn validate(
     sub: &SubscriptionSettings,
     settings: &Settings,
 ) -> Result<(), ValidationError> {
-    if !sub.enabled {
-        return Err(ValidationError::Subscription(
-            "subscription is not enabled".to_string(),
-        ));
-    }
-
     let path = sub.path.as_str();
     if path.is_empty() || !path.starts_with('/') || path == "/" {
         return Err(ValidationError::InvalidPath(format!(
@@ -172,7 +162,7 @@ pub(crate) struct SubscriptionResponse<'a> {
     pub dns_upstreams: &'a Vec<String>,
 }
 
-/// Resolve an enabled [`SubscriptionSettings`] into a [`SubscriptionConfig`].
+/// Resolve a [`SubscriptionSettings`] into a [`SubscriptionConfig`].
 ///
 /// Reads the matched main host's certificate chain and checks system-verifiability
 /// using the same logic as `client_config::build`. Returns `Err` (without mutating
@@ -213,7 +203,7 @@ pub(crate) fn resolve(
     };
 
     Ok(SubscriptionConfig {
-        enabled: true,
+        enabled: sub.enabled,
         path: sub.path.clone(),
         hostname: sub.hostname.clone().unwrap_or_default(),
         address: sub.address.clone().unwrap_or_default(),
@@ -268,11 +258,35 @@ mod tests {
     }
 
     #[test]
-    fn validate_rejects_disabled() {
+    fn validate_accepts_disabled_section_with_valid_path() {
         let mut sub = enabled_sub();
         sub.enabled = false;
         let settings = Settings::default();
-        assert!(validate(&sub, &settings).is_err());
+        assert!(validate(&sub, &settings).is_ok());
+    }
+
+    #[test]
+    fn validate_disabled_section_rejects_invalid_address() {
+        let mut sub = enabled_sub();
+        sub.enabled = false;
+        sub.address = Some("no-port-here".to_string());
+        let settings = Settings::default();
+        assert!(matches!(
+            validate(&sub, &settings),
+            Err(ValidationError::Subscription(_))
+        ));
+    }
+
+    #[test]
+    fn validate_disabled_section_rejects_bad_path() {
+        let mut sub = enabled_sub();
+        sub.enabled = false;
+        sub.path = "/".to_string();
+        let settings = Settings::default();
+        assert!(matches!(
+            validate(&sub, &settings),
+            Err(ValidationError::InvalidPath(_))
+        ));
     }
 
     #[test]

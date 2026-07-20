@@ -78,11 +78,19 @@ async fn handle_stream(
         req.uri
     );
 
-    if method != http::Method::GET {
-        respond.send_bad_response(
-            StatusCode::METHOD_NOT_ALLOWED,
-            vec![("allow".to_string(), "GET".to_string())],
-        )?;
+    // Precedence: SNI mismatch -> 404, disabled -> 403, bad creds -> 401,
+    // non-GET -> 405, then 200. SNI and disabled are checked before auth so
+    // the endpoint never confirms the subscription path to unauthenticated
+    // callers and never serves it on the wrong TLS host.
+    let config = context.subscription.read().unwrap().clone();
+    let Some(config) = config else {
+        respond.send_bad_response(StatusCode::NOT_FOUND, vec![])?;
+        return Ok(());
+    };
+
+
+    if !config.enabled {
+        respond.send_bad_response(StatusCode::FORBIDDEN, vec![])?;
         return Ok(());
     }
 
@@ -97,11 +105,13 @@ async fn handle_stream(
         return Ok(());
     };
 
-    let config = context.subscription.read().unwrap().clone();
-    let Some(config) = config.filter(|c| c.enabled) else {
-        respond.send_bad_response(StatusCode::FORBIDDEN, vec![])?;
+    if method != http::Method::GET {
+        respond.send_bad_response(
+            StatusCode::METHOD_NOT_ALLOWED,
+            vec![("allow".to_string(), "GET".to_string())],
+        )?;
         return Ok(());
-    };
+    }
 
     let response = subscription::SubscriptionResponse {
         version: 1,

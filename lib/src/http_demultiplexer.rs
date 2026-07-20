@@ -34,8 +34,8 @@ impl HttpDemux {
     fn check_subscription(&self, request: &http_codec::RequestHeaders) -> bool {
         let sub = self.subscription.read().unwrap();
         match sub.as_ref() {
-            Some(cfg) if cfg.enabled => request.uri.path() == cfg.path,
-            _ => false,
+            Some(cfg) => request.uri.path() == cfg.path,
+            None => false,
         }
     }
 
