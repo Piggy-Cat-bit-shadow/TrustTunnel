@@ -70,6 +70,12 @@ and the [GUI application][trusttunnel-flutter-client].
 - **Platform Compatibility**: The server is compatible with Linux and macOS.
   The client is available for Android, Apple, Windows, and Linux.
 
+- **Subscription Endpoint**: Optionally serve a per-user subscription URL over
+  HTTPS. When `[subscription]` is enabled in `vpn.toml`, each client can fetch
+  its own JSON configuration (connection parameters, credentials, DNS upstreams,
+  and more) over HTTPS using HTTP Basic Auth, enabling self-service and
+  auto-refreshing client configuration without manual file redistribution.
+
 ---
 
 ## Client Features
@@ -291,6 +297,47 @@ cd /opt/trusttunnel/
 ```
 
 This outputs a TOML configuration file suitable for the CLI client.
+
+##### Subscription URL
+
+The endpoint can serve a per-user subscription URL over HTTPS. When the
+`[subscription]` section is enabled in `vpn.toml`, each client can fetch its own
+JSON configuration — connection parameters, credentials, DNS upstreams, custom
+SNI, and client random prefix — over HTTPS using HTTP Basic Auth against
+`credentials.toml`. This lets a client provision and refresh its configuration
+directly from the endpoint from a single URL, without manual file
+redistribution.
+
+When `[subscription]` is enabled, the `--format toml` export additionally
+includes a `subscription_url` field of the form:
+
+```text
+https://<username>:<password>@<host><path>
+```
+
+The embedded credentials belong to the client named by `-c <client_name>` (read
+from `credentials.toml`); the host and path come from the `hostname` and `path`
+keys of the `[subscription]` section (`/subscription` by default). Characters
+outside the RFC 3986 unreserved set are percent-encoded, so the URL stays valid
+even when a username or password contains `:`, `@`, `/`, or other reserved
+characters.
+
+To override the base URL — for example, when the endpoint is reachable through a
+reverse proxy or a different public hostname — pass
+`--subscription-url <base_url>`:
+
+```shell
+./trusttunnel_endpoint vpn.toml hosts.toml -c <client_name> -a <address> \
+    --format toml --subscription-url https://sub.example.org/my-sub
+```
+
+Only the base URL (scheme, host, and path) is overridden; the credentials are
+always embedded from `credentials.toml`.
+
+The `[subscription]` section is hot-reloaded on `SIGHUP`; if the reloaded
+section fails to parse or validate, the previous configuration is kept. See
+[CONFIGURATION.md](CONFIGURATION.md#subscription-settings) for the full
+reference.
 
 Both formats contain all necessary information to connect to the endpoint. See the
 [TrustTunnel Flutter Client documentation][trusttunnel-flutter-configuration] for setup instructions.

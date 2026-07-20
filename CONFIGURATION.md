@@ -18,6 +18,7 @@ This document describes all available configuration settings and configuration f
     - [Reverse Proxy Settings](#reverse-proxy-settings)
     - [ICMP Settings](#icmp-settings)
     - [Metrics Settings](#metrics-settings)
+    - [Subscription Settings](#subscription-settings)
 - [TLS Hosts Reference](#tls-hosts-reference)
 - [Rules Reference](#rules-reference)
 - [Runtime Configuration](#runtime-configuration)
@@ -403,6 +404,40 @@ request_timeout_secs = 3
 | `address` | String | `127.0.0.1:1987` | Metrics endpoint address |
 | `request_timeout_secs` | Integer | `3` | Request timeout in seconds |
 
+### Subscription Settings
+
+Optional. Enables an HTTPS subscription endpoint that serves a per-user JSON
+configuration over an existing main TLS host.
+
+```toml
+[subscription]
+enabled = true
+hostname = "vpn.example.com"
+path = "/subscription"
+address = "203.0.113.1:443"
+name = "Acme Corp VPN"
+dns_upstreams = ["tls://1.1.1.1", "tls://8.8.8.8"]
+custom_sni = "example.org"
+client_random_prefix = "a0b0/f0f0"
+```
+
+| Setting | Type | Default | Description |
+| --- | --- | --- | --- |
+| `enabled` | Boolean | `false` | Master switch |
+| `hostname` | String | - | **Required when enabled.** Must match a `main_hosts` hostname |
+| `path` | String | `"/subscription"` | HTTP path served (exact match) |
+| `address` | String | - | **Required when enabled.** `host:port` / `ip:port` placed in the JSON |
+| `name` | String | - | Creation-only hint included in the JSON |
+| `dns_upstreams` | Array | `[]` | Creation-only hint included in the JSON |
+| `custom_sni` | String | - | Custom TLS SNI; omitted from JSON when empty |
+| `client_random_prefix` | String | - | `hex[/hex]`; omitted from JSON when empty |
+
+The endpoint requires HTTP Basic Auth (`Authorization` header) matching an
+entry in `credentials.toml`; the response body contains only that user's
+credentials. Non-GET requests return `405`; missing or invalid credentials
+return `401`; an authenticated request while subscription is disabled returns
+`403`; otherwise the response is `200` with the per-user JSON body.
+
 ---
 
 ## TLS Hosts Reference
@@ -494,15 +529,19 @@ action = "deny"
 
 ## Runtime Configuration
 
-### Hot Reloading TLS Hosts
+### Hot Reloading TLS Hosts and Subscription Settings
 
-Send `SIGHUP` to the endpoint process to reload TLS hosts settings without restart:
+Send `SIGHUP` to the endpoint process to reload TLS hosts settings and the
+optional `[subscription]` section without restart:
 
 ```bash
 kill -HUP $(pidof trusttunnel_endpoint)
 ```
 
-This reloads the TLS hosts settings file specified at startup.
+This reloads the TLS hosts file and the `[subscription]` section of `vpn.toml`
+specified at startup. If the new `[subscription]` section fails to parse or
+validate, the previously loaded subscription configuration is kept and a
+warning is logged.
 
 ### Systemd Service
 
