@@ -609,6 +609,7 @@ impl Core {
                             return Err((client_id, format!("Failed to create HTTP codec: {}", e)))
                         }
                     },
+                    tls_connection_meta.sni,
                     client_id,
                 )
                 .await
@@ -699,9 +700,11 @@ impl Core {
                 .await
             }
             net_utils::Channel::Subscription => {
+                let sni = tls_connection_meta.sni.clone();
                 http_subscription_handler::listen(
                     context.clone(),
                     Box::new(Http3Codec::new(socket, client_id.clone())),
+                    sni,
                     client_id,
                 )
                 .await

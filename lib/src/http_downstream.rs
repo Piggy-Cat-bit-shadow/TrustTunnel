@@ -173,13 +173,17 @@ impl Downstream for HttpDownstream {
                 }
                 net_utils::Channel::Subscription => {
                     log_id!(trace, stream_id, "HTTP downstream: subscription request");
-                    tokio::spawn(async move {
-                        http_subscription_handler::listen(
-                            context.clone(),
-                            Box::new(http_codec::stream_into_codec(stream, protocol)),
-                            stream_id,
-                        )
-                        .await
+                    tokio::spawn({
+                        let sni = self.tls_domain.clone();
+                        async move {
+                            http_subscription_handler::listen(
+                                context.clone(),
+                                Box::new(http_codec::stream_into_codec(stream, protocol)),
+                                sni,
+                                stream_id,
+                            )
+                            .await
+                        }
                     });
                 }
             }

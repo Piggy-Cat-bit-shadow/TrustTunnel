@@ -11,6 +11,7 @@ use std::sync::Arc;
 pub(crate) async fn listen(
     context: Arc<core::Context>,
     mut codec: Box<dyn HttpCodec>,
+    sni: String,
     log_id: log_utils::IdChain<u64>,
 ) {
     let (mut shutdown_notification, _shutdown_completion) = {
@@ -25,7 +26,7 @@ pub(crate) async fn listen(
                 Err(e) => log_id!(debug, log_id, "Shutdown notification failure: {}", e),
             }
         },
-        _ = listen_inner(context, codec.as_mut(), &log_id) => (),
+        _ = listen_inner(context, codec.as_mut(), sni, &log_id) => (),
     }
 
     if let Err(e) = codec.graceful_shutdown().await {
@@ -36,13 +37,16 @@ pub(crate) async fn listen(
 async fn listen_inner(
     context: Arc<core::Context>,
     codec: &mut dyn HttpCodec,
+    sni: String,
     log_id: &log_utils::IdChain<u64>,
 ) {
     loop {
         match codec.listen().await {
             Ok(Some(stream)) => {
                 let id = stream.id();
-                if let Err(e) = handle_stream(context.clone(), stream, id.clone()).await {
+                if let Err(e) =
+                    handle_stream(context.clone(), stream, sni.clone(), id.clone()).await
+                {
                     log_id!(debug, id, "Subscription request failed: {}", e);
                 }
             }
@@ -65,6 +69,7 @@ async fn listen_inner(
 async fn handle_stream(
     context: Arc<core::Context>,
     stream: Box<dyn http_codec::Stream>,
+    sni: String,
     log_id: log_utils::IdChain<u64>,
 ) -> io::Result<()> {
     let (request, respond) = stream.split();
@@ -88,6 +93,10 @@ async fn handle_stream(
         return Ok(());
     };
 
+    if sni != config.hostname {
+        respond.send_bad_response(StatusCode::NOT_FOUND, vec![])?;
+        return Ok(());
+    }
 
     if !config.enabled {
         respond.send_bad_response(StatusCode::FORBIDDEN, vec![])?;
