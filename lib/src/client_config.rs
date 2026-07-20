@@ -44,6 +44,30 @@ pub fn build_subscription_url(base: &str, username: &str, password: &str) -> Str
     )
 }
 
+/// Validate a `--subscription-url` override.
+///
+/// The override is the host+path base only: an `https://` URL with no embedded
+/// userinfo. Credentials are always appended from `credentials.toml`, so an
+/// override carrying `user:pass@` is rejected to surface the misuse rather than
+/// silently stripping it. A `@` that appears after the first `/` (i.e. in the
+/// path) is left alone.
+pub fn validate_subscription_url_override(url: &str) -> Result<(), String> {
+    let rest = url
+        .strip_prefix("https://")
+        .ok_or_else(|| "--subscription-url must be an https:// URL".to_string())?;
+
+    let authority = rest.split_once('/').map(|(auth, _)| auth).unwrap_or(rest);
+    if authority.is_empty() {
+        return Err("--subscription-url must specify a host".to_string());
+    }
+    if authority.contains('@') {
+        return Err("--subscription-url must not contain credentials; \
+             they are appended from credentials.toml"
+            .to_string());
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn build(
     client: &String,
@@ -447,5 +471,39 @@ omxU7kknZApM\n\
         let uri = config.compose_deeplink().unwrap();
         assert!(!uri.contains("subscription_url"));
         assert!(!uri.contains("alice%3As3cret"));
+    }
+
+    #[test]
+    fn validate_override_accepts_plain_https() {
+        assert!(validate_subscription_url_override("https://vpn.example.com/subscription").is_ok());
+        assert!(validate_subscription_url_override("https://vpn.example.com").is_ok());
+        assert!(validate_subscription_url_override("https://1.2.3.4:443/subscription").is_ok());
+    }
+
+    #[test]
+    fn validate_override_rejects_non_https() {
+        let err = validate_subscription_url_override("http://vpn.example.com/subscription");
+        assert!(err.is_err());
+        assert!(err.unwrap_err().contains("https"));
+    }
+
+    #[test]
+    fn validate_override_rejects_embedded_credentials() {
+        let err =
+            validate_subscription_url_override("https://alice:s3cret@vpn.example.com/subscription");
+        assert!(err.is_err());
+        assert!(err.unwrap_err().contains("credential"));
+    }
+
+    #[test]
+    fn validate_override_accepts_at_in_path() {
+        // `@` after the first `/` is in the path, not userinfo, and is allowed.
+        assert!(validate_subscription_url_override("https://vpn.example.com/p@ath").is_ok());
+    }
+
+    #[test]
+    fn validate_override_rejects_empty_host() {
+        assert!(validate_subscription_url_override("https://").is_err());
+        assert!(validate_subscription_url_override("https:///subscription").is_err());
     }
 }

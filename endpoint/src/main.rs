@@ -454,7 +454,14 @@ fn main() {
                 .find(|c| c.username == *username)?;
             let hostname = sub.hostname.as_deref()?;
             let base: String = match args.get_one::<String>(SUBSCRIPTION_URL_PARAM_NAME) {
-                Some(override_url) => override_url.clone(),
+                Some(override_url) => {
+                    if let Err(e) = client_config::validate_subscription_url_override(override_url)
+                    {
+                        eprintln!("{e}");
+                        std::process::exit(1);
+                    }
+                    override_url.clone()
+                }
                 None => format!("https://{}{}", hostname, sub.path.as_str()),
             };
             Some(client_config::build_subscription_url(
