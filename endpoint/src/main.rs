@@ -518,8 +518,9 @@ fn main() {
         async move { core.listen().await }
     };
 
-    let reload_tls_hosts_task = {
+    let reload_tls_hosts_and_subscription_task = {
         let tls_hosts_settings_path = tls_hosts_settings_path.clone();
+        let settings_path = settings_path.clone();
         async move {
             let mut sighup_listener = signal::unix::signal(signal::unix::SignalKind::hangup())
                 .expect("Couldn't start SIGHUP listener");
@@ -534,9 +535,36 @@ fn main() {
                 )
                 .expect("Couldn't parse the TLS hosts settings file");
 
-                core.reload_tls_hosts_settings(tls_hosts_settings)
+                core.reload_tls_hosts_settings(tls_hosts_settings.clone())
                     .expect("Couldn't apply new settings");
                 info!("TLS hosts settings are successfully reloaded");
+
+                info!("Reloading subscription settings");
+                let subscription = std::fs::read_to_string(&settings_path).and_then(|contents| {
+                    extract_subscription(&contents).map_err(|e| {
+                        std::io::Error::other(format!(
+                            "Couldn't parse the subscription section: {}",
+                            e
+                        ))
+                    })
+                });
+                match subscription {
+                    Ok(sub) => {
+                        if let Err(e) = core.reload_subscription_settings(sub, &tls_hosts_settings)
+                        {
+                            error!(
+                                "Failed to reload subscription settings: {}; keeping previous",
+                                e
+                            );
+                        } else {
+                            info!("Subscription settings are successfully reloaded");
+                        }
+                    }
+                    Err(e) => error!(
+                        "Failed to reload subscription settings: {}; keeping previous",
+                        e
+                    ),
+                }
             }
         }
     };
@@ -557,8 +585,8 @@ fn main() {
                     1
                 }
             },
-            _ = reload_tls_hosts_task => {
-                error!("Error while reloading TLS hosts");
+            _ = reload_tls_hosts_and_subscription_task => {
+                error!("Error while reloading TLS hosts and subscription");
                 1
             },
             _ = interrupt_task => {
@@ -669,6 +697,25 @@ fn parse_endpoint_address(input: &str, default_port: u16) -> String {
     } else {
         format!("{input}:{default_port}")
     }
+}
+
+#[derive(serde::Deserialize)]
+struct SubscriptionOnly {
+    #[serde(default)]
+    subscription: Option<trusttunnel::subscription::SubscriptionSettings>,
+}
+
+/// Extract just the `[subscription]` section from `vpn.toml` contents.
+///
+/// Re-parsing the whole `Settings` would re-read `credentials.toml` and
+/// re-validate unrelated fields; this wrapper ignores all other keys (serde
+/// ignores unknown fields by default) and only validates `[subscription]` via
+/// `Core::reload_subscription_settings`.
+fn extract_subscription(
+    contents: &str,
+) -> Result<Option<trusttunnel::subscription::SubscriptionSettings>, toml::de::Error> {
+    let only: SubscriptionOnly = toml::from_str(contents)?;
+    Ok(only.subscription)
 }
 
 #[cfg(test)]
@@ -930,5 +977,27 @@ mod tests {
         );
 
         let _ = std::fs::remove_file(&rules_path);
+    }
+
+    #[test]
+    fn extract_subscription_parses_enabled_section() {
+        let toml = "[subscription]\nenabled = true\nhostname = \"vpn.example.com\"\naddress = \"1.2.3.4:443\"\n";
+        let sub = extract_subscription(toml).unwrap().unwrap();
+        assert!(sub.enabled);
+        assert_eq!(sub.hostname.as_deref(), Some("vpn.example.com"));
+        assert_eq!(sub.path, "/subscription");
+    }
+
+    #[test]
+    fn extract_subscription_returns_none_when_absent() {
+        let toml = "listen_address = \"0.0.0.0:443\"\n";
+        assert!(extract_subscription(toml).unwrap().is_none());
+    }
+
+    #[test]
+    fn extract_subscription_ignores_other_keys() {
+        let toml = "listen_address = \"0.0.0.0:443\"\n[subscription]\nenabled = true\n";
+        let sub = extract_subscription(toml).unwrap().unwrap();
+        assert!(sub.enabled);
     }
 }

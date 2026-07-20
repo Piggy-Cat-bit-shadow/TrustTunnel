@@ -245,7 +245,7 @@ pub struct Settings {
     built: bool,
 }
 
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Default, Serialize, Deserialize, Clone)]
 #[cfg_attr(feature = "rt_doc", derive(RuntimeDoc))]
 pub struct TlsHostInfo {
     /// Used as a key for selecting a certificate chain in TLS handshake.
@@ -270,7 +270,7 @@ pub struct TlsHostInfo {
     pub allowed_sni: Vec<String>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 #[cfg_attr(test, derive(Default))]
 #[cfg_attr(feature = "rt_doc", derive(RuntimeDoc))]
 pub struct TlsHostsSettings {

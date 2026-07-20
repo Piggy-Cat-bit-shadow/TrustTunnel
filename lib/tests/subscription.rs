@@ -244,3 +244,94 @@ async fn run_endpoint(settings: Settings, hosts: TlsHostsSettings) {
     let endpoint = Core::new(settings, authenticator, hosts, shutdown).unwrap();
     endpoint.listen().await.unwrap();
 }
+
+async fn fetch_address(endpoint_address: &SocketAddr, auth: &str) -> String {
+    let stream =
+        common::establish_tls_connection(common::MAIN_DOMAIN_NAME, endpoint_address, None).await;
+    let url = format!(
+        "https://{}:{}/subscription",
+        common::MAIN_DOMAIN_NAME,
+        endpoint_address.port()
+    );
+    let (parts, body) = common::do_get_request(
+        stream,
+        http::Version::HTTP_11,
+        &url,
+        &[("authorization", auth)],
+    )
+    .await;
+    assert_eq!(parts.status, http::StatusCode::OK);
+    let body = String::from_utf8(body.to_vec()).unwrap();
+    body.split("\"address\":\"")
+        .nth(1)
+        .unwrap()
+        .split('"')
+        .next()
+        .unwrap()
+        .to_string()
+}
+
+#[tokio::test]
+async fn reload_updates_served_address_and_keeps_old_on_error() {
+    common::set_up_logger();
+    let endpoint_address = common::make_endpoint_address();
+    let cert_file = common::make_cert_key_file();
+    let cert_path = cert_file.path.to_str().unwrap();
+    let settings = make_settings(&endpoint_address, "203.0.113.1:443", true, alice_bob());
+    let hosts = make_hosts(cert_path);
+    let hosts_for_reload = make_hosts(cert_path);
+
+    let shutdown = Shutdown::new();
+    let authenticator: Option<Arc<dyn Authenticator>> = Some(Arc::new(
+        RegistryBasedAuthenticator::new(settings.get_clients()),
+    ));
+    let core = Arc::new(Core::new(settings, authenticator, hosts, shutdown).unwrap());
+
+    let core_for_listen = core.clone();
+    let listen_task = tokio::spawn(async move {
+        core_for_listen.listen().await.unwrap();
+    });
+
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert_eq!(
+        fetch_address(&endpoint_address, ALICE_BASIC).await,
+        "203.0.113.1:443"
+    );
+
+    let updated = SubscriptionSettings {
+        enabled: true,
+        hostname: Some(common::MAIN_DOMAIN_NAME.to_string()),
+        path: SubscriptionSettings::default_path(),
+        address: Some("198.51.100.7:443".to_string()),
+        name: None,
+        dns_upstreams: vec![],
+        custom_sni: None,
+        client_random_prefix: None,
+    };
+    core.reload_subscription_settings(Some(updated), &hosts_for_reload)
+        .unwrap();
+    assert_eq!(
+        fetch_address(&endpoint_address, ALICE_BASIC).await,
+        "198.51.100.7:443"
+    );
+
+    let bad = SubscriptionSettings {
+        enabled: true,
+        hostname: Some("nope.invalid".to_string()),
+        path: SubscriptionSettings::default_path(),
+        address: Some("0.0.0.0:0".to_string()),
+        name: None,
+        dns_upstreams: vec![],
+        custom_sni: None,
+        client_random_prefix: None,
+    };
+    assert!(core
+        .reload_subscription_settings(Some(bad), &hosts_for_reload)
+        .is_err());
+    assert_eq!(
+        fetch_address(&endpoint_address, ALICE_BASIC).await,
+        "198.51.100.7:443"
+    );
+
+    listen_task.abort();
+}

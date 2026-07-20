@@ -243,6 +243,30 @@ impl Core {
         Ok(())
     }
 
+    /// Reload the subscription settings.
+    ///
+    /// `sub` is the freshly parsed `[subscription]` section (or `None` when the
+    /// section is absent). On a validation/resolve failure the previously applied
+    /// configuration is left unchanged and an error is returned.
+    pub fn reload_subscription_settings(
+        &self,
+        sub: Option<crate::subscription::SubscriptionSettings>,
+        hosts: &settings::TlsHostsSettings,
+    ) -> io::Result<()> {
+        let resolved = match sub {
+            Some(sub) if sub.enabled => Some(
+                crate::subscription::resolve(&sub, &self.context.settings, hosts).map_err(|e| {
+                    io::Error::other(format!("Subscription resolve failure: {:?}", e))
+                })?,
+            ),
+            _ => None,
+        };
+
+        let mut store = self.context.subscription.write().unwrap();
+        *store = resolved;
+        Ok(())
+    }
+
     async fn listen_tcp(&self) -> io::Result<()> {
         let settings = self.context.settings.clone();
         let has_tcp_based_codec =
