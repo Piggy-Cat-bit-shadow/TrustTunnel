@@ -140,7 +140,6 @@ pub(crate) struct SubscriptionConfig {
     pub(crate) address: String,
     pub(crate) name: Option<String>,
     pub(crate) dns_upstreams: Vec<String>,
-    pub(crate) has_ipv6: bool,
     /// `Some(pem)` when the certificate is not system-verifiable; `None` otherwise.
     pub(crate) certificate: Option<String>,
     /// Custom SNI; `None` when unset/empty (omitted from the JSON).
@@ -220,7 +219,6 @@ pub(crate) fn resolve(
         address: sub.address.clone().unwrap_or_default(),
         name: sub.name.clone(),
         dns_upstreams: sub.dns_upstreams.clone(),
-        has_ipv6: settings.ipv6_available,
         certificate,
         custom_sni: sub.custom_sni.clone().filter(|s| !s.is_empty()),
         client_random_prefix: sub.client_random_prefix.clone().filter(|s| !s.is_empty()),

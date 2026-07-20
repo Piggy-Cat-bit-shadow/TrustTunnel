@@ -109,7 +109,7 @@ async fn handle_stream(
         address: &config.address,
         username: &client.0,
         password: &client.1,
-        has_ipv6: config.has_ipv6,
+        has_ipv6: true,
         upstream_protocol: "http2",
         anti_dpi: false,
         skip_verification: false,
