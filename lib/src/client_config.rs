@@ -7,6 +7,43 @@ use macros::{Getter, RuntimeDoc};
 use once_cell::sync::Lazy;
 use toml_edit::{value, Document};
 
+/// Percent-encode a username/password for the `userinfo` component of a URL
+/// per RFC 3986. Encodes any byte outside the unreserved set `A-Za-z0-9-._~`.
+fn percent_encode_userinfo(s: &str) -> String {
+    fn is_unreserved(b: u8) -> bool {
+        b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~')
+    }
+    let mut out = String::with_capacity(s.len());
+    for &b in s.as_bytes() {
+        if is_unreserved(b) {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{:02X}", b));
+        }
+    }
+    out
+}
+
+/// Build the subscription URL `https://<user>:<pass>@<host><path>`.
+///
+/// `base` is `https://<host><path>` (optionally overridden via `--subscription-url`,
+/// in which case any embedded userinfo is stripped). Credentials are always
+/// appended and percent-encoded.
+pub fn build_subscription_url(base: &str, username: &str, password: &str) -> String {
+    let host_path = base
+        .strip_prefix("https://")
+        .unwrap_or("")
+        .rsplit_once('@')
+        .map(|(_, rest)| rest)
+        .unwrap_or_else(|| base.strip_prefix("https://").unwrap_or(base));
+    format!(
+        "https://{}:{}@{}",
+        percent_encode_userinfo(username),
+        percent_encode_userinfo(password),
+        host_path
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn build(
     client: &String,
@@ -17,6 +54,7 @@ pub fn build(
     client_random_prefix: Option<String>,
     name: Option<String>,
     dns_upstreams: Vec<String>,
+    subscription_url: Option<String>,
 ) -> ClientConfig {
     let user = username
         .iter()
@@ -52,6 +90,7 @@ pub fn build(
         anti_dpi: false,
         name: name.unwrap_or_default(),
         dns_upstreams,
+        subscription_url,
     }
 }
 
@@ -89,6 +128,9 @@ pub struct ClientConfig {
     name: String,
     /// DNS upstreams to use when connected to this endpoint
     dns_upstreams: Vec<String>,
+    /// Subscription URL (HTTPS, credentials embedded). Present only when
+    /// `[subscription]` is enabled on the endpoint. TOML export only.
+    subscription_url: Option<String>,
 }
 
 impl ClientConfig {
@@ -116,6 +158,9 @@ impl ClientConfig {
         if !self.dns_upstreams.is_empty() {
             let vec = toml_edit::Array::from_iter(self.dns_upstreams.iter().map(|x| x.as_str()));
             doc["dns_upstreams"] = value(vec);
+        }
+        if let Some(url) = self.subscription_url.as_ref() {
+            doc["subscription_url"] = value(url);
         }
         doc.to_string()
     }
@@ -254,6 +299,7 @@ mod tests {
                 anti_dpi: false,
                 name: String::new(),
                 dns_upstreams: vec![],
+                subscription_url: None,
             }
         }
     }
@@ -359,5 +405,47 @@ omxU7kknZApM\n\
             decoded.certificate.is_none(),
             "Deep-link should not contain certificate when cert is system-verifiable"
         );
+    }
+
+    #[test]
+    fn percent_encode_reserved_chars_in_userinfo() {
+        assert_eq!(percent_encode_userinfo("alice"), "alice");
+        assert_eq!(percent_encode_userinfo("a:b@/"), "a%3Ab%40%2F");
+    }
+
+    #[test]
+    fn build_subscription_url_appends_credentials() {
+        let url = build_subscription_url("https://vpn.example.com/subscription", "alice", "s3cret");
+        assert_eq!(url, "https://alice:s3cret@vpn.example.com/subscription");
+    }
+
+    #[test]
+    fn build_subscription_url_strips_existing_userinfo_in_override() {
+        let url = build_subscription_url("https://old:old@sub.example.com/sub", "alice", "p@ss");
+        assert_eq!(url, "https://alice:p%40ss@sub.example.com/sub");
+    }
+
+    #[test]
+    fn compose_toml_emits_subscription_url_when_set() {
+        let mut config = ClientConfig::test_config(TWO_CERT_PEM_CHAIN.to_string(), false);
+        config.subscription_url =
+            Some("https://alice:s3cret@vpn.example.com/subscription".to_string());
+        let toml_output = config.compose_toml();
+
+        let doc: Document = toml_output.parse().unwrap();
+        assert_eq!(
+            doc["subscription_url"].as_str().unwrap(),
+            "https://alice:s3cret@vpn.example.com/subscription"
+        );
+    }
+
+    #[test]
+    fn compose_deeplink_has_no_subscription_url() {
+        let mut config = ClientConfig::test_config(TWO_CERT_PEM_CHAIN.to_string(), false);
+        config.subscription_url =
+            Some("https://alice:s3cret@vpn.example.com/subscription".to_string());
+        let uri = config.compose_deeplink().unwrap();
+        assert!(!uri.contains("subscription_url"));
+        assert!(!uri.contains("alice%3As3cret"));
     }
 }

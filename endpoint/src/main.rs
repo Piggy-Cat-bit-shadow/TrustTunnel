@@ -31,6 +31,7 @@ const PREFIX_MASK_PARAM_NAME: &str = "prefix_mask";
 const FORMAT_PARAM_NAME: &str = "format";
 const NAME_PARAM_NAME: &str = "name";
 const DNS_UPSTREAM_PARAM_NAME: &str = "dns_upstream";
+const SUBSCRIPTION_URL_PARAM_NAME: &str = "subscription_url";
 const SENTRY_DSN_PARAM_NAME: &str = "sentry_dsn";
 const THREADS_NUM_PARAM_NAME: &str = "threads_num";
 const TRUSTTUNNEL_QR_URL: &str = "https://trusttunnel.org/qr.html";
@@ -184,6 +185,11 @@ fn main() {
                 .short('d')
                 .long("dns-upstream")
                 .help("DNS upstream address to include in the client configuration. Can be specified multiple times."),
+            clap::Arg::new(SUBSCRIPTION_URL_PARAM_NAME)
+                .action(clap::ArgAction::Set)
+                .requires(CLIENT_CONFIG_PARAM_NAME)
+                .long("subscription-url")
+                .help("Override the subscription base URL (host and path only) in the TOML client config. Credentials are always appended from credentials.toml."),
         ])
         .disable_version_flag(true)
         .get_matches();
@@ -438,6 +444,26 @@ fn main() {
             .map(|vals| vals.cloned().collect())
             .unwrap_or_default();
 
+        let subscription_url = settings.get_subscription().as_ref().and_then(|sub| {
+            if !sub.enabled {
+                return None;
+            }
+            let user = settings
+                .get_clients()
+                .iter()
+                .find(|c| c.username == *username)?;
+            let hostname = sub.hostname.as_deref()?;
+            let base: String = match args.get_one::<String>(SUBSCRIPTION_URL_PARAM_NAME) {
+                Some(override_url) => override_url.clone(),
+                None => format!("https://{}{}", hostname, sub.path.as_str()),
+            };
+            Some(client_config::build_subscription_url(
+                &base,
+                &user.username,
+                &user.password,
+            ))
+        });
+
         let client_config = client_config::build(
             username,
             addresses,
@@ -447,6 +473,7 @@ fn main() {
             client_random_prefix,
             name,
             dns_upstreams,
+            subscription_url,
         );
 
         let format = args
