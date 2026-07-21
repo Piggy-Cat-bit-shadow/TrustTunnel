@@ -24,23 +24,32 @@ fn percent_encode_userinfo(s: &str) -> String {
     out
 }
 
+/// Split the part of a URL following the scheme into the authority component
+/// and the remaining tail (path, query, fragment). The authority ends at the
+/// first `/`, `?`, or `#` per RFC 3986.
+fn split_authority(url: &str) -> (&str, &str) {
+    let authority_end = url.find(['/', '?', '#']).unwrap_or(url.len());
+    url.split_at(authority_end)
+}
+
 /// Build the subscription URL `https://<user>:<pass>@<host><path>`.
 ///
 /// `base` is `https://<host><path>` (optionally overridden via `--subscription-url`,
 /// in which case any embedded userinfo is stripped). Credentials are always
 /// appended and percent-encoded.
 pub fn build_subscription_url(base: &str, username: &str, password: &str) -> String {
-    let host_path = base
-        .strip_prefix("https://")
-        .unwrap_or("")
+    let rest = base.strip_prefix("https://").unwrap_or(base);
+    // Strip userinfo only from the authority part: a '@' in the path or query
+    // is valid and must be preserved.
+    let (authority, tail) = split_authority(rest);
+    let authority = authority
         .rsplit_once('@')
-        .map(|(_, rest)| rest)
-        .unwrap_or_else(|| base.strip_prefix("https://").unwrap_or(base));
+        .map_or(authority, |(_, host)| host);
+    let host_path = format!("{authority}{tail}");
     format!(
-        "https://{}:{}@{}",
+        "https://{}:{}@{host_path}",
         percent_encode_userinfo(username),
         percent_encode_userinfo(password),
-        host_path
     )
 }
 
@@ -49,14 +58,14 @@ pub fn build_subscription_url(base: &str, username: &str, password: &str) -> Str
 /// The override is the host+path base only: an `https://` URL with no embedded
 /// userinfo. Credentials are always appended from `credentials.toml`, so an
 /// override carrying `user:pass@` is rejected to surface the misuse rather than
-/// silently stripping it. A `@` that appears after the first `/` (i.e. in the
-/// path) is left alone.
+/// silently stripping it. A `@` outside the authority (i.e. in the path or
+/// query) is left alone.
 pub fn validate_subscription_url_override(url: &str) -> Result<(), String> {
     let rest = url
         .strip_prefix("https://")
         .ok_or_else(|| "--subscription-url must be an https:// URL".to_string())?;
 
-    let authority = rest.split_once('/').map(|(auth, _)| auth).unwrap_or(rest);
+    let (authority, _) = split_authority(rest);
     if authority.is_empty() {
         return Err("--subscription-url must specify a host".to_string());
     }
@@ -472,6 +481,20 @@ omxU7kknZApM\n\
     }
 
     #[test]
+    fn build_subscription_url_preserves_at_in_path_and_query() {
+        // `@` after the authority is not userinfo and must be preserved,
+        // matching what `validate_subscription_url_override` allows.
+        let url = build_subscription_url("https://vpn.example.com/p@ath", "alice", "s3cret");
+        assert_eq!(url, "https://alice:s3cret@vpn.example.com/p@ath");
+        let url =
+            build_subscription_url("https://vpn.example.com/sub?next=/p@ath", "alice", "s3cret");
+        assert_eq!(url, "https://alice:s3cret@vpn.example.com/sub?next=/p@ath");
+        // The authority ends at the first `?` or `#` even without a path.
+        let url = build_subscription_url("https://vpn.example.com?next=@x", "alice", "s3cret");
+        assert_eq!(url, "https://alice:s3cret@vpn.example.com?next=@x");
+    }
+
+    #[test]
     fn compose_toml_emits_subscription_url_when_set() {
         let mut config = ClientConfig::test_config(TWO_CERT_PEM_CHAIN.to_string(), false);
         config.subscription_url =
@@ -553,9 +576,12 @@ omxU7kknZApM\n\
     }
 
     #[test]
-    fn validate_override_accepts_at_in_path() {
-        // `@` after the first `/` is in the path, not userinfo, and is allowed.
+    fn validate_override_accepts_at_outside_authority() {
+        // `@` in the path or query is not userinfo and is allowed.
         assert!(validate_subscription_url_override("https://vpn.example.com/p@ath").is_ok());
+        assert!(validate_subscription_url_override("https://vpn.example.com/sub?next=@x").is_ok());
+        // The authority ends at the first `?` or `#` even without a path.
+        assert!(validate_subscription_url_override("https://vpn.example.com?next=@x").is_ok());
     }
 
     #[test]
