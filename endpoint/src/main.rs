@@ -32,6 +32,7 @@ const FORMAT_PARAM_NAME: &str = "format";
 const NAME_PARAM_NAME: &str = "name";
 const DNS_UPSTREAM_PARAM_NAME: &str = "dns_upstream";
 const SUBSCRIPTION_URL_PARAM_NAME: &str = "subscription_url";
+const SUBSCRIPTION_ONLY_PARAM_NAME: &str = "subscription_only";
 const SENTRY_DSN_PARAM_NAME: &str = "sentry_dsn";
 const THREADS_NUM_PARAM_NAME: &str = "threads_num";
 const TRUSTTUNNEL_QR_URL: &str = "https://trusttunnel.org/qr.html";
@@ -189,7 +190,12 @@ fn main() {
                 .action(clap::ArgAction::Set)
                 .requires(CLIENT_CONFIG_PARAM_NAME)
                 .long("subscription-url")
-                .help("Override the subscription base URL (host and path only) in the TOML client config. Credentials are always appended from credentials.toml."),
+                .help("Override the subscription base URL (host and path only) in the exported client config. Credentials are always appended from credentials.toml."),
+            clap::Arg::new(SUBSCRIPTION_ONLY_PARAM_NAME)
+                .action(clap::ArgAction::SetTrue)
+                .requires(CLIENT_CONFIG_PARAM_NAME)
+                .long("subscription-only")
+                .help("With --format deeplink, export a minimal deep link that contains only the subscription URL (no static connection parameters). Requires [subscription] to be enabled in vpn.toml."),
         ])
         .disable_version_flag(true)
         .get_matches();
@@ -471,6 +477,8 @@ fn main() {
             ))
         });
 
+        let subscription_enabled = subscription_url.is_some();
+
         let client_config = client_config::build(
             username,
             addresses,
@@ -488,23 +496,42 @@ fn main() {
             .map(String::as_str)
             .unwrap_or("deeplink");
 
+        let subscription_only = args.get_flag(SUBSCRIPTION_ONLY_PARAM_NAME);
+        if subscription_only && format != "deeplink" {
+            eprintln!("Error: --subscription-only is only valid with --format deeplink.");
+            std::process::exit(1);
+        }
+        if subscription_only && !subscription_enabled {
+            eprintln!(
+                "Error: --subscription-only requires [subscription] to be enabled in vpn.toml."
+            );
+            std::process::exit(1);
+        }
+
         match format {
             "toml" => {
                 println!("{}", client_config.compose_toml());
             }
-            "deeplink" => match client_config.compose_deeplink() {
-                Ok(deep_link) => {
-                    println!("{deep_link}");
-                    println!(
-                        "\nTo connect on mobile, you can scan QR code on the page: {TRUSTTUNNEL_QR_URL}#tt={}",
-                        deep_link.strip_prefix("tt://?").unwrap()
-                    );
+            "deeplink" => {
+                let deeplink = if subscription_only {
+                    client_config.compose_deeplink_subscription_only()
+                } else {
+                    client_config.compose_deeplink()
+                };
+                match deeplink {
+                    Ok(deep_link) => {
+                        println!("{deep_link}");
+                        println!(
+                            "\nTo connect on mobile, you can scan QR code on the page: {TRUSTTUNNEL_QR_URL}#tt={}",
+                            deep_link.strip_prefix("tt://?").unwrap()
+                        );
+                    }
+                    Err(e) => {
+                        eprintln!("Error generating deep-link: {}", e);
+                        std::process::exit(1);
+                    }
                 }
-                Err(e) => {
-                    eprintln!("Error generating deep-link: {}", e);
-                    std::process::exit(1);
-                }
-            },
+            }
             _ => {
                 eprintln!(
                     "Error: unsupported format '{}'. Use 'toml' or 'deeplink'.",

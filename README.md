@@ -308,8 +308,9 @@ SNI, and client random prefix — over HTTPS using HTTP Basic Auth against
 directly from the endpoint from a single URL, without manual file
 redistribution.
 
-When `[subscription]` is enabled, the `--format toml` export additionally
-includes a `subscription_url` field of the form:
+When `[subscription]` is enabled, the client config export (both
+`--format toml` and `--format deeplink`) additionally includes a
+`subscription_url` field of the form:
 
 ```text
 https://<username>:<password>@<host><path>
@@ -333,6 +334,22 @@ reverse proxy or a different public hostname — pass
 
 Only the base URL (scheme, host, and path) is overridden; the credentials are
 always embedded from `credentials.toml`.
+
+With `--format deeplink` (the default), the subscription URL is embedded in
+the deep link (deep-link format version 2). Clients that support it keep
+their configuration current by fetching the URL.
+
+To export a minimal link that contains only the subscription URL (no static
+connection parameters), pass `--subscription-only`:
+
+```shell
+./trusttunnel_endpoint vpn.toml hosts.toml -c <client_name> -a <address> \
+    --format deeplink --subscription-only
+```
+
+Clients importing a subscription-only link must fetch the subscription before
+they can connect. Note that a deep link carrying a subscription URL embeds
+HTTP Basic Auth credentials; treat such links as secrets.
 
 The `[subscription]` section is hot-reloaded on `SIGHUP`; if the reloaded
 section fails to parse or validate, the previous configuration is kept. See

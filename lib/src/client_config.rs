@@ -153,7 +153,8 @@ pub struct ClientConfig {
     /// DNS upstreams to use when connected to this endpoint
     dns_upstreams: Vec<String>,
     /// Subscription URL (HTTPS, credentials embedded). Present only when
-    /// `[subscription]` is enabled on the endpoint. TOML export only.
+    /// `[subscription]` is enabled on the endpoint. Included in both TOML and
+    /// deep-link exports.
     subscription_url: Option<String>,
 }
 
@@ -211,10 +212,10 @@ impl ClientConfig {
 
         // Build deep-link config
         let config = DeepLinkConfig {
-            hostname: self.hostname.clone(),
+            hostname: Some(self.hostname.clone()),
             addresses: self.addresses.clone(),
-            username: self.username.clone(),
-            password: self.password.clone(),
+            username: Some(self.username.clone()),
+            password: Some(self.password.clone()),
             client_random_prefix: if self.client_random_prefix.is_empty() {
                 None
             } else {
@@ -236,7 +237,28 @@ impl ClientConfig {
                 Some(self.name.clone())
             },
             dns_upstreams: self.dns_upstreams.clone(),
+            subscription_url: self.subscription_url.clone(),
         };
+
+        trusttunnel_deeplink::encode(&config)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+    }
+
+    /// Generate a subscription-only deep-link URI (format v2) containing just
+    /// the subscription URL. Clients must fetch the subscription before they
+    /// can connect; there are no static fallback parameters.
+    pub fn compose_deeplink_subscription_only(&self) -> std::io::Result<String> {
+        let subscription_url = self.subscription_url.clone().ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "subscription is not enabled on the endpoint",
+            )
+        })?;
+
+        let config = trusttunnel_deeplink::DeepLinkConfig::builder()
+            .subscription_url(Some(subscription_url))
+            .build()
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
         trusttunnel_deeplink::encode(&config)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
@@ -464,13 +486,48 @@ omxU7kknZApM\n\
     }
 
     #[test]
-    fn compose_deeplink_has_no_subscription_url() {
+    fn compose_deeplink_includes_subscription_url() {
         let mut config = ClientConfig::test_config(TWO_CERT_PEM_CHAIN.to_string(), false);
-        config.subscription_url =
-            Some("https://alice:s3cret@vpn.example.com/subscription".to_string());
+        let url = "https://alice:s3cret@vpn.example.com/subscription".to_string();
+        config.subscription_url = Some(url.clone());
         let uri = config.compose_deeplink().unwrap();
-        assert!(!uri.contains("subscription_url"));
-        assert!(!uri.contains("alice%3As3cret"));
+
+        let decoded = trusttunnel_deeplink::decode(&uri).unwrap();
+        assert_eq!(decoded.subscription_url.as_deref(), Some(url.as_str()));
+        // Static fallback parameters are still present.
+        assert_eq!(decoded.hostname.as_deref(), Some("vpn.example.com"));
+        assert_eq!(decoded.username.as_deref(), Some("alice"));
+    }
+
+    #[test]
+    fn compose_deeplink_without_subscription_url() {
+        let config = ClientConfig::test_config(TWO_CERT_PEM_CHAIN.to_string(), false);
+        let uri = config.compose_deeplink().unwrap();
+
+        let decoded = trusttunnel_deeplink::decode(&uri).unwrap();
+        assert_eq!(decoded.subscription_url, None);
+    }
+
+    #[test]
+    fn compose_deeplink_subscription_only_minimal() {
+        let mut config = ClientConfig::test_config(TWO_CERT_PEM_CHAIN.to_string(), false);
+        let url = "https://alice:s3cret@vpn.example.com/subscription".to_string();
+        config.subscription_url = Some(url.clone());
+        let uri = config.compose_deeplink_subscription_only().unwrap();
+
+        let decoded = trusttunnel_deeplink::decode(&uri).unwrap();
+        assert_eq!(decoded.subscription_url.as_deref(), Some(url.as_str()));
+        assert_eq!(decoded.hostname, None);
+        assert!(decoded.addresses.is_empty());
+        assert_eq!(decoded.username, None);
+        assert_eq!(decoded.password, None);
+        assert_eq!(decoded.certificate, None);
+    }
+
+    #[test]
+    fn compose_deeplink_subscription_only_requires_url() {
+        let config = ClientConfig::test_config(TWO_CERT_PEM_CHAIN.to_string(), false);
+        assert!(config.compose_deeplink_subscription_only().is_err());
     }
 
     #[test]
