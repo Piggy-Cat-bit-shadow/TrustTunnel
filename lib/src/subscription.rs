@@ -10,13 +10,13 @@ pub struct SubscriptionSettings {
     /// Master switch. When `false` the endpoint does not serve subscription data.
     #[serde(default)]
     pub enabled: bool,
-    /// Hostname matching a `main_hosts` entry; required when `enabled`.
+    /// Hostname matching a `main_hosts` entry; required.
     #[serde(default)]
     pub hostname: Option<String>,
     /// HTTP path at which the subscription JSON is served.
     #[serde(default = "SubscriptionSettings::default_path")]
     pub path: String,
-    /// Endpoint address (`host:port` / `ip:port`) placed in the JSON response.
+    /// Endpoint address (`host:port` / `ip:port`) placed in the JSON response; required.
     #[serde(default)]
     pub address: Option<String>,
     /// Human-readable server label; creation-only hint for clients.

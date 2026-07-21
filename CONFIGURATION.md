@@ -424,13 +424,16 @@ client_random_prefix = "a0b0/f0f0"
 | Setting | Type | Default | Description |
 | --- | --- | --- | --- |
 | `enabled` | Boolean | `false` | Master switch |
-| `hostname` | String | - | **Required when enabled.** Must match a `main_hosts` hostname |
+| `hostname` | String | - | Must match a `main_hosts` hostname |
 | `path` | String | `"/subscription"` | HTTP path served (exact match) |
-| `address` | String | - | **Required when enabled.** `host:port` / `ip:port` placed in the JSON |
-| `name` | String | - | Creation-only hint included in the JSON |
-| `dns_upstreams` | Array | `[]` | Creation-only hint included in the JSON |
-| `custom_sni` | String | - | Custom TLS SNI; omitted from JSON when empty |
-| `client_random_prefix` | String | - | `hex[/hex]`; omitted from JSON when empty |
+| `address` | String | - | `host:port` / `ip:port` placed in the JSON |
+| `name` | String | - | (Optional) Configuration name hint |
+| `dns_upstreams` | Array | `[]` | (Optional) DNS upstreams |
+| `custom_sni` | String | - | (Optional) Custom TLS SNI |
+| `client_random_prefix` | String | - | (Optional) `hex[/hex]` |
+
+All fields are validated whenever the `[subscription]` section is present in
+`vpn.toml`, even when `enabled = false`.
 
 The endpoint requires HTTP Basic Auth (`Authorization` header) matching an
 entry in `credentials.toml`; the response body contains only that user's
