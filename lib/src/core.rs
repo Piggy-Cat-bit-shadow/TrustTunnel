@@ -17,8 +17,8 @@ use crate::tls_demultiplexer::TlsDemux;
 use crate::tls_listener::{TlsAcceptor, TlsListener};
 use crate::tunnel::Tunnel;
 use crate::{
-    authentication, http_ping_handler, http_speedtest_handler, http_subscription_handler, log_id,
-    log_utils, metrics, net_utils, reverse_proxy, rules, settings, tls_demultiplexer, tunnel,
+    authentication, http_ping_handler, http_speedtest_handler, log_id, log_utils, metrics,
+    net_utils, reverse_proxy, rules, settings, tls_demultiplexer, tunnel,
 };
 use socket2::{Domain, Protocol as SockProtocol, SockRef, Socket, Type};
 use std::io;
@@ -595,25 +595,10 @@ impl Core {
                 )
                 .await
             }
-            net_utils::Channel::Subscription => {
-                http_subscription_handler::listen(
-                    context.clone(),
-                    match Self::make_tcp_http_codec(
-                        tls_connection_meta.protocol,
-                        core_settings,
-                        stream,
-                        client_id.clone(),
-                    ) {
-                        Ok(x) => x,
-                        Err(e) => {
-                            return Err((client_id, format!("Failed to create HTTP codec: {}", e)))
-                        }
-                    },
-                    tls_connection_meta.sni,
-                    client_id,
-                )
-                .await
-            }
+            // TLS-level routing is SNI-based and subscription is
+            // never matched by hostname, only by request path via `HttpDemux`
+            // in `HttpDownstream`.
+            net_utils::Channel::Subscription => unreachable!(),
         }
 
         Ok(())
@@ -699,16 +684,10 @@ impl Core {
                 )
                 .await
             }
-            net_utils::Channel::Subscription => {
-                let sni = tls_connection_meta.sni.clone();
-                http_subscription_handler::listen(
-                    context.clone(),
-                    Box::new(Http3Codec::new(socket, client_id.clone())),
-                    sni,
-                    client_id,
-                )
-                .await
-            }
+            // TLS-level routing is SNI-based and subscription is
+            // never matched by hostname, only by request path via `HttpDemux`
+            // in `HttpDownstream`.
+            net_utils::Channel::Subscription => unreachable!(),
         }
     }
 
