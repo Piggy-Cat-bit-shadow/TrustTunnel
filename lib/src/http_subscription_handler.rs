@@ -83,10 +83,9 @@ async fn handle_stream(
         req.uri
     );
 
-    // Precedence: SNI mismatch -> 404, disabled -> 403, bad creds -> 401,
-    // non-GET -> 405, then 200. SNI and disabled are checked before auth so
-    // the endpoint never confirms the subscription path to unauthenticated
-    // callers and never serves it on the wrong TLS host.
+    // Precedence: SNI mismatch -> 404, bad creds -> 401, disabled -> 403,
+    // non-GET -> 405, then 200. SNI is checked before auth so the endpoint never
+    // serves subscription data on the wrong TLS host.
     let config = context.subscription.read().unwrap().clone();
     let Some(config) = config else {
         respond.send_bad_response(StatusCode::NOT_FOUND, vec![])?;
