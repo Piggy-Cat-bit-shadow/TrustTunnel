@@ -98,11 +98,6 @@ async fn handle_stream(
         return Ok(());
     }
 
-    if !config.enabled {
-        respond.send_bad_response(StatusCode::FORBIDDEN, vec![])?;
-        return Ok(());
-    }
-
     let Some(client) = authenticate(&context, &req.headers) else {
         respond.send_bad_response(
             StatusCode::UNAUTHORIZED,
@@ -113,6 +108,11 @@ async fn handle_stream(
         )?;
         return Ok(());
     };
+
+    if !config.enabled {
+        respond.send_bad_response(StatusCode::FORBIDDEN, vec![])?;
+        return Ok(());
+    }
 
     if method != http::Method::GET {
         respond.send_bad_response(
