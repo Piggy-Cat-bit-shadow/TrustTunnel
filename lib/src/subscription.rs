@@ -1,4 +1,4 @@
-use crate::settings::{Settings, TlsHostsSettings, ValidationError};
+use crate::settings::{Settings, TlsHostInfo, TlsHostsSettings, ValidationError};
 
 /// The `[subscription]` settings parsed from `vpn.toml`.
 ///
@@ -162,6 +162,29 @@ pub(crate) struct SubscriptionResponse<'a> {
     pub dns_upstreams: &'a Vec<String>,
 }
 
+/// Validate `sub` against the endpoint and TLS hosts settings.
+///
+/// Runs the field checks ([`validate`]) and verifies that `hostname` matches a
+/// `main_hosts` entry, returning the matched host. Does not read certificate
+/// files, so it is cheap enough to run on every endpoint invocation.
+pub fn validate_with_hosts<'a>(
+    sub: &SubscriptionSettings,
+    settings: &Settings,
+    hosts: &'a TlsHostsSettings,
+) -> Result<&'a TlsHostInfo, ValidationError> {
+    validate(sub, settings)?;
+    let hostname = sub.hostname.as_deref().unwrap_or("");
+    hosts
+        .main_hosts
+        .iter()
+        .find(|h| h.hostname == hostname)
+        .ok_or_else(|| {
+            ValidationError::Subscription(format!(
+                "subscription hostname '{hostname}' is not present in main_hosts"
+            ))
+        })
+}
+
 /// Resolve a [`SubscriptionSettings`] into a [`SubscriptionConfig`].
 ///
 /// Reads the matched main host's certificate chain and checks system-verifiability
@@ -173,18 +196,7 @@ pub(crate) fn resolve(
     settings: &Settings,
     hosts: &TlsHostsSettings,
 ) -> Result<SubscriptionConfig, ValidationError> {
-    validate(sub, settings)?;
-
-    let hostname = sub.hostname.as_deref().unwrap_or("");
-    let host = hosts
-        .main_hosts
-        .iter()
-        .find(|h| h.hostname == hostname)
-        .ok_or_else(|| {
-            ValidationError::Subscription(format!(
-                "subscription hostname '{hostname}' is not present in main_hosts"
-            ))
-        })?;
+    let host = validate_with_hosts(sub, settings, hosts)?;
 
     let system_verifiable = crate::cert_verification::CertificateVerifier::new()
         .ok()
@@ -348,5 +360,45 @@ mod tests {
     fn validate_accepts_enabled_section() {
         let settings = Settings::default();
         assert!(validate(&enabled_sub(), &settings).is_ok());
+    }
+
+    fn tls_hosts_with(hostname: &str) -> TlsHostsSettings {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let tmp = std::env::temp_dir().join(format!("trusttunnel_sub_test_cert_{id}.pem"));
+        std::fs::write(&tmp, b"").unwrap();
+        let path = tmp.to_str().unwrap();
+        toml::from_str(&format!(
+            "[[main_hosts]]\nhostname = \"{hostname}\"\ncert_chain_path = \"{path}\"\nprivate_key_path = \"{path}\"\n"
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn validate_with_hosts_returns_matching_host() {
+        let hosts = tls_hosts_with("vpn.example.com");
+        let settings = Settings::default();
+        let host = validate_with_hosts(&enabled_sub(), &settings, &hosts).unwrap();
+        assert_eq!(host.hostname, "vpn.example.com");
+    }
+
+    #[test]
+    fn validate_with_hosts_rejects_unknown_hostname() {
+        let hosts = tls_hosts_with("other.example.com");
+        let settings = Settings::default();
+        assert!(matches!(
+            validate_with_hosts(&enabled_sub(), &settings, &hosts),
+            Err(ValidationError::Subscription(_))
+        ));
+    }
+
+    #[test]
+    fn validate_with_hosts_rejects_invalid_section() {
+        let mut sub = enabled_sub();
+        sub.address = Some("no-port".to_string());
+        let hosts = tls_hosts_with("vpn.example.com");
+        let settings = Settings::default();
+        assert!(validate_with_hosts(&sub, &settings, &hosts).is_err());
     }
 }

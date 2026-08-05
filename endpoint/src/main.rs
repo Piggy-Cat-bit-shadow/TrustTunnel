@@ -117,7 +117,6 @@ fn main() {
                 .help("Path to a file containing TLS hosts settings. Sending SIGHUP to the process causes reloading the settings."),
             clap::Arg::new(CLIENT_CONFIG_PARAM_NAME)
                 .action(clap::ArgAction::Set)
-                .requires(ADDRESS_PARAM_NAME)
                 .short('c')
                 .long("client_config")
                 .value_names(["client_name"])
@@ -127,7 +126,7 @@ fn main() {
                 .requires(CLIENT_CONFIG_PARAM_NAME)
                 .short('a')
                 .long("address")
-                .help("Endpoint address to be added to client's config. Accepts ip, ip:port, domain, or domain:port."),
+                .help("Endpoint address to be added to client's config. Accepts ip, ip:port, domain, or domain:port. Optional when [subscription] is enabled in vpn.toml: the subscription address is used as the fallback."),
             clap::Arg::new(CUSTOM_SNI_PARAM_NAME)
                 .action(clap::ArgAction::Set)
                 .requires(CLIENT_CONFIG_PARAM_NAME)
@@ -265,14 +264,31 @@ fn main() {
     )
     .expect("Couldn't parse the TLS hosts settings file");
 
+    if let Some(sub) = settings.get_subscription().as_ref() {
+        if let Err(e) =
+            trusttunnel::subscription::validate_with_hosts(sub, &settings, &tls_hosts_settings)
+        {
+            eprintln!("Error: {e:?}");
+            std::process::exit(1);
+        }
+    }
+
     if args.contains_id(CLIENT_CONFIG_PARAM_NAME) {
         let username = args.get_one::<String>(CLIENT_CONFIG_PARAM_NAME).unwrap();
         let listen_port = settings.get_listen_address().port();
-        let addresses: Vec<String> = args
+        let explicit_addresses: Vec<String> = args
             .get_many::<String>(ADDRESS_PARAM_NAME)
-            .expect("At least one address should be specified")
-            .map(|x| parse_endpoint_address(x, listen_port))
-            .collect();
+            .map(|vals| vals.cloned().collect())
+            .unwrap_or_default();
+        let addresses = select_client_addresses(
+            &explicit_addresses,
+            settings.get_subscription().as_ref(),
+            listen_port,
+        )
+        .unwrap_or_else(|e| {
+            eprintln!("Error: {e}");
+            std::process::exit(1);
+        });
 
         for addr in &addresses {
             if let Some(domain) = extract_domain_for_warning(addr) {
@@ -484,6 +500,14 @@ fn main() {
 
         let subscription_enabled = subscription_url.is_some();
 
+        let subscription_only = args.get_flag(SUBSCRIPTION_ONLY_PARAM_NAME);
+        if !explicit_addresses.is_empty() && subscription_enabled && !subscription_only {
+            eprintln!(
+                "Warning: [subscription] is enabled: the exported addresses will be \
+                 rewritten on the first subscription fetch, so --address can be omitted."
+            );
+        }
+
         let client_config = client_config::build(
             username,
             addresses,
@@ -501,7 +525,6 @@ fn main() {
             .map(String::as_str)
             .unwrap_or("deeplink");
 
-        let subscription_only = args.get_flag(SUBSCRIPTION_ONLY_PARAM_NAME);
         if subscription_only && format != "deeplink" {
             eprintln!("Error: --subscription-only is only valid with --format deeplink.");
             std::process::exit(1);
@@ -732,6 +755,31 @@ fn extract_rules_file_path(settings_contents: &str, settings_path: &str) -> Opti
         .parent()
         .unwrap_or_else(|| Path::new("."));
     Some(settings_dir.join(path))
+}
+
+/// Select the `addresses` list for the exported client config: explicit
+/// `--address` values, or the `[subscription] address` as fallback.
+fn select_client_addresses(
+    explicit: &[String],
+    subscription: Option<&trusttunnel::subscription::SubscriptionSettings>,
+    listen_port: u16,
+) -> std::io::Result<Vec<String>> {
+    if !explicit.is_empty() {
+        return Ok(explicit
+            .iter()
+            .map(|a| parse_endpoint_address(a, listen_port))
+            .collect());
+    }
+    let address = subscription
+        .filter(|sub| sub.enabled)
+        .and_then(|sub| sub.address.as_deref())
+        .ok_or_else(|| {
+            std::io::Error::other(
+                "no --address specified and [subscription] is not usable as a fallback \
+                 (requires enabled = true and hostname and address set in vpn.toml)",
+            )
+        })?;
+    Ok(vec![parse_endpoint_address(address, listen_port)])
 }
 
 /// Parse an endpoint address string into a normalized `host:port` format.
@@ -1065,5 +1113,57 @@ mod tests {
         let toml = "listen_address = \"0.0.0.0:443\"\n[subscription]\nenabled = true\n";
         let sub = extract_subscription(toml).unwrap().unwrap();
         assert!(sub.enabled);
+    }
+
+    fn sub_settings(
+        enabled: bool,
+        hostname: Option<&str>,
+        address: Option<&str>,
+    ) -> trusttunnel::subscription::SubscriptionSettings {
+        trusttunnel::subscription::SubscriptionSettings {
+            enabled,
+            hostname: hostname.map(str::to_string),
+            address: address.map(str::to_string),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn select_addresses_explicit_wins() {
+        let explicit = vec!["1.2.3.4:443".to_string(), "10.0.0.1:8443".to_string()];
+        let sub = sub_settings(true, Some("vpn.example.com"), Some("5.6.7.8:443"));
+        let result = select_client_addresses(&explicit, Some(&sub), 443).unwrap();
+        assert_eq!(result, explicit);
+    }
+
+    #[test]
+    fn select_addresses_falls_back_to_subscription() {
+        let sub = sub_settings(true, Some("vpn.example.com"), Some("5.6.7.8:8000"));
+        let result = select_client_addresses(&[], Some(&sub), 443).unwrap();
+        assert_eq!(result, vec!["5.6.7.8:8000".to_string()]);
+    }
+
+    #[test]
+    fn select_addresses_subscription_fallback_gets_listen_port_when_missing() {
+        let sub = sub_settings(true, Some("vpn.example.com"), Some("5.6.7.8"));
+        let result = select_client_addresses(&[], Some(&sub), 8443).unwrap();
+        assert_eq!(result, vec!["5.6.7.8:8443".to_string()]);
+    }
+
+    #[test]
+    fn select_addresses_errors_without_address_and_subscription() {
+        assert!(select_client_addresses(&[], None, 443).is_err());
+    }
+
+    #[test]
+    fn select_addresses_errors_when_subscription_disabled() {
+        let sub = sub_settings(false, Some("vpn.example.com"), Some("5.6.7.8:443"));
+        assert!(select_client_addresses(&[], Some(&sub), 443).is_err());
+    }
+
+    #[test]
+    fn select_addresses_errors_when_subscription_has_no_address() {
+        let sub = sub_settings(true, Some("vpn.example.com"), None);
+        assert!(select_client_addresses(&[], Some(&sub), 443).is_err());
     }
 }
