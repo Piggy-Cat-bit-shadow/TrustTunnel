@@ -77,6 +77,15 @@ pub fn validate_subscription_url_override(url: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Derive the port for the subscription URL from the `[subscription] address`
+/// value. Returns `None` — the port is omitted from the URL — when `address`
+/// is `None`, carries no valid non-zero port, or the port is the HTTPS
+/// default (443).
+pub fn subscription_url_port(address: Option<&str>) -> Option<u16> {
+    let port: u16 = address?.rsplit_once(':')?.1.parse().ok()?;
+    (port != 0 && port != 443).then_some(port)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn build(
     client: &String,
@@ -588,5 +597,40 @@ omxU7kknZApM\n\
     fn validate_override_rejects_empty_host() {
         assert!(validate_subscription_url_override("https://").is_err());
         assert!(validate_subscription_url_override("https:///subscription").is_err());
+    }
+
+    #[test]
+    fn subscription_url_port_included_for_non_default_port() {
+        assert_eq!(subscription_url_port(Some("1.2.3.4:8000")), Some(8000));
+        assert_eq!(
+            subscription_url_port(Some("vpn.example.com:8443")),
+            Some(8443)
+        );
+        assert_eq!(
+            subscription_url_port(Some("[2001:db8::1]:8000")),
+            Some(8000)
+        );
+    }
+
+    #[test]
+    fn subscription_url_port_omitted_when_address_absent() {
+        assert_eq!(subscription_url_port(None), None);
+    }
+
+    #[test]
+    fn subscription_url_port_omitted_for_default_port() {
+        assert_eq!(subscription_url_port(Some("1.2.3.4:443")), None);
+        assert_eq!(subscription_url_port(Some("vpn.example.com:443")), None);
+    }
+
+    #[test]
+    fn subscription_url_port_omitted_when_port_invalid() {
+        assert_eq!(subscription_url_port(Some("vpn.example.com")), None);
+        assert_eq!(
+            subscription_url_port(Some("vpn.example.com:notaport")),
+            None
+        );
+        assert_eq!(subscription_url_port(Some("1.2.3.4:0")), None);
+        assert_eq!(subscription_url_port(Some("1.2.3.4:99999")), None);
     }
 }

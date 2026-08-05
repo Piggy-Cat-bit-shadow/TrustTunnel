@@ -468,7 +468,12 @@ fn main() {
                     }
                     override_url.clone()
                 }
-                None => format!("https://{}{}", hostname, sub.path.as_str()),
+                None => {
+                    let port = client_config::subscription_url_port(sub.address.as_deref())
+                        .map(|port| format!(":{port}"))
+                        .unwrap_or_default();
+                    format!("https://{hostname}{port}{}", sub.path.as_str())
+                }
             };
             Some(client_config::build_subscription_url(
                 &base,
