@@ -194,7 +194,7 @@ fn main() {
                 .action(clap::ArgAction::SetTrue)
                 .requires(CLIENT_CONFIG_PARAM_NAME)
                 .long("subscription-only")
-                .help("With --format deeplink, export a minimal deep link that contains only the subscription URL (no static connection parameters). Requires [subscription] to be enabled in vpn.toml."),
+                .help("With --format deeplink, export a minimal deep link that contains only the subscription URL (no static connection parameters). Requires [subscription] to be enabled in vpn.toml and the subscription host certificate to be verifiable by system CAs."),
         ])
         .disable_version_flag(true)
         .get_matches();
@@ -264,14 +264,13 @@ fn main() {
     )
     .expect("Couldn't parse the TLS hosts settings file");
 
-    if let Some(sub) = settings.get_subscription().as_ref() {
-        if let Err(e) =
-            trusttunnel::subscription::validate_with_hosts(sub, &settings, &tls_hosts_settings)
-        {
-            eprintln!("Error: {e:?}");
-            std::process::exit(1);
-        }
-    }
+    let subscription_host = settings.get_subscription().as_ref().map(|sub| {
+        trusttunnel::subscription::validate_with_hosts(sub, &settings, &tls_hosts_settings)
+            .unwrap_or_else(|e| {
+                eprintln!("Error: {e:?}");
+                std::process::exit(1);
+            })
+    });
 
     if args.contains_id(CLIENT_CONFIG_PARAM_NAME) {
         let username = args.get_one::<String>(CLIENT_CONFIG_PARAM_NAME).unwrap();
@@ -534,6 +533,29 @@ fn main() {
                 "Error: --subscription-only requires [subscription] to be enabled in vpn.toml."
             );
             std::process::exit(1);
+        }
+        if subscription_only
+            && args
+                .get_one::<String>(SUBSCRIPTION_URL_PARAM_NAME)
+                .is_none()
+        {
+            if let Some(host) = subscription_host {
+                let system_verifiable = trusttunnel::cert_verification::CertificateVerifier::new()
+                    .ok()
+                    .map(|verifier| {
+                        verifier.is_system_verifiable(&host.cert_chain_path, &host.hostname)
+                    })
+                    .unwrap_or(false);
+                if !system_verifiable {
+                    eprintln!(
+                        "Error: --subscription-only requires the certificate of the subscription \
+                         host '{}' to be verifiable by system CAs. Export without \
+                         --subscription-only so the certificate is embedded in the deep link.",
+                        host.hostname
+                    );
+                    std::process::exit(1);
+                }
+            }
         }
 
         match format {
