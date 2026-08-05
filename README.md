@@ -348,7 +348,10 @@ connection parameters), pass `--subscription-only`:
 ```
 
 Clients importing a subscription-only link must fetch the subscription before
-they can connect. Note that a deep link carrying a subscription URL embeds
+they can connect. Because such link carries no embedded certificate, the
+export fails unless the certificate of the subscription host is verifiable by
+system CAs (the check is skipped when `--subscription-url` overrides the URL).
+Note that a deep link carrying a subscription URL embeds
 HTTP Basic Auth credentials; treat such links as secrets.
 
 The `[subscription]` section is hot-reloaded on `SIGHUP`; if the reloaded

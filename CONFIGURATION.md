@@ -53,7 +53,7 @@ The endpoint binary accepts the following command line arguments:
 | `<settings>` | - | **Required.** Path to main settings file | - |
 | `<tls_hosts_settings>` | - | **Required.** Path to TLS hosts settings file | - |
 | `--client_config` | `-c` | Print endpoint config for specified client and exit | - |
-| `--address` | `-a` | Endpoint address to add to client config (requires `-c`). Accepts `ip`, `ip:port`, `domain`, or `domain:port`. | - |
+| `--address` | `-a` | Endpoint address to add to client config (requires `-c`). Accepts `ip`, `ip:port`, `domain`, or `domain:port`. Optional when `[subscription]` is enabled: the subscription `address` is used as the fallback. | - |
 | `--client-random-prefix` | `-r` | Use an explicit `client_random_prefix` in the exported client config (requires `-c`). | - |
 | `--generate-client-random-prefix` | - | Generate a new `client_random_prefix`, append a matching allow rule to `rules.toml`, and use it in the exported client config (requires `-c`). | - |
 | `--prefix-length` | - | Length in bytes for generated `client_random_prefix` values (requires `--generate-client-random-prefix`). | `4` |
@@ -432,8 +432,12 @@ client_random_prefix = "a0b0/f0f0"
 | `custom_sni` | String | - | (Optional) Custom TLS SNI |
 | `client_random_prefix` | String | - | (Optional) `hex[/hex]` |
 
-All fields are validated whenever the `[subscription]` section is present in
+All fields are validated on every endpoint invocation (including the
+`--client_config` export) whenever the `[subscription]` section is present in
 `vpn.toml`, even when `enabled = false`.
+
+The `address` value is also reused by the `--client_config` export
+if the `--address` is not specified
 
 The endpoint requires HTTP Basic Auth (`Authorization` header) matching an
 entry in `credentials.toml`; the response body contains only that user's
