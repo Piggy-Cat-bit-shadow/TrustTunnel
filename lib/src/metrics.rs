@@ -205,7 +205,9 @@ impl Metrics {
 
     /// Relabel an active session from its current username to a new one.
     /// Used for proxy-basic tunnels whose username is only known after the first
-    /// authenticated request. No-op when the label is unchanged.
+    /// authenticated request. No-op when the label is unchanged. Gauges are only
+    /// adjusted for connections that are actually tracked in the clients map, so
+    /// the per-user counter always stays balanced.
     pub fn transfer_session_username(
         &self,
         protocol: Protocol,
@@ -215,10 +217,10 @@ impl Metrics {
         let Ok(mut clients) = self.clients.lock() else {
             return;
         };
-        let old = clients
-            .get(conn_id)
-            .and_then(|c| c.username.clone())
-            .unwrap_or_default();
+        let Some(entry) = clients.get_mut(conn_id) else {
+            return;
+        };
+        let old = entry.username.clone().unwrap_or_default();
         let new = username.clone().unwrap_or_default();
         if old == new {
             return;
@@ -231,9 +233,7 @@ impl Metrics {
                 .with_label_values(&[new.as_str(), protocol.as_str()])
                 .inc();
         }
-        if let Some(c) = clients.get_mut(conn_id) {
-            c.username = username;
-        }
+        entry.username = username;
     }
 
     /// Aggregate per-user summaries: configured clients (shown even when idle) merged
@@ -508,8 +508,14 @@ async fn handle_clients_collect(
         .iter()
         .map(|c| c.username.clone())
         .collect();
-    let content_vec = serde_json::to_vec(&metrics.clients_summary(&configured_usernames))
-        .unwrap_or_else(|_| b"[]".to_vec());
+    let content_vec = match serde_json::to_vec(&metrics.clients_summary(&configured_usernames)) {
+        Ok(v) => v,
+        Err(_) => {
+            let respond = stream.split().1;
+            return respond
+                .send_bad_response(http::status::StatusCode::INTERNAL_SERVER_ERROR, vec![]);
+        }
+    };
     let mut content = Bytes::from(content_vec);
     let response = http::Response::builder()
         .version(stream.request().request().version)

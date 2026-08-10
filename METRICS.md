@@ -102,7 +102,8 @@ Notes:
   active runtime connections. Configured clients with no active sessions are
   present with zero counters, so the monitoring system can track unused users.
 - `inbound`/`outbound` are lifetime totals per user; `sessions` is the current
-  number of active sessions; `ip` is the most recent client IP and may be
+  number of active sessions; `ip` is a client IP observed for this user (one is
+  chosen arbitrarily when the user connects from multiple addresses) and may be
   `null` (e.g. HTTP/3 connections where the peer address could not be resolved).
 
 ### `/health-check`
