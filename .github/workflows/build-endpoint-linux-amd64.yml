@@ -38,8 +38,11 @@ jobs:
             --package trusttunnel_endpoint --bin trusttunnel_endpoint
           BIN=target/x86_64-unknown-linux-musl/release/trusttunnel_endpoint
           test -x "$BIN"
-          strip --strip-unneeded "$BIN"
-          readelf -S "$BIN" | grep -qE '\.debug_' && { echo 'debug sections remain' >&2; exit 1; } || true
+          x86_64-linux-musl-strip --strip-all "$BIN"
+          if readelf -S "$BIN" | grep -qE '\.debug_|\.symtab'; then
+            echo 'debug or symbol sections remain after stripping' >&2
+            exit 1
+          fi
           file "$BIN"
           "$BIN" -v
           SHA="$(sha256sum "$BIN" | awk '{print $1}')"
