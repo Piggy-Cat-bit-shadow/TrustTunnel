@@ -1,0 +1,58 @@
+name: Build TrustTunnel Endpoint (Linux amd64, musl)
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Ref to build (branch, tag, or commit SHA). Defaults to master.'
+        required: false
+        default: master
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build linux-x86_64 trusttunnel_endpoint
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    container:
+      image: adguard/core-libs:2.10
+      options: --user root
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref }}
+          fetch-depth: 1
+
+      - name: Build static, stripped release binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          CC=x86_64-linux-musl-gcc \
+          CXX=x86_64-linux-musl-g++ \
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=x86_64-linux-musl-gcc \
+          BINDGEN_EXTRA_CLANG_ARGS="--sysroot=/opt/cross/x86_64-linux-musl" \
+          cargo build --release --target x86_64-unknown-linux-musl \
+            --package trusttunnel_endpoint --bin trusttunnel_endpoint
+          BIN=target/x86_64-unknown-linux-musl/release/trusttunnel_endpoint
+          test -x "$BIN"
+          strip --strip-unneeded "$BIN"
+          readelf -S "$BIN" | grep -qE '\.debug_' && { echo 'debug sections remain' >&2; exit 1; } || true
+          file "$BIN"
+          "$BIN" -v
+          SHA="$(sha256sum "$BIN" | awk '{print $1}')"
+          SIZE="$(stat -c %s "$BIN")"
+          echo "### Stripped static Linux amd64 binary" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Size: ${SIZE} bytes ($(numfmt --to=iec-i --suffix=B "$SIZE"))" >> "$GITHUB_STEP_SUMMARY"
+          echo "- SHA256: \`${SHA}\`" >> "$GITHUB_STEP_SUMMARY"
+          mkdir dist
+          cp "$BIN" dist/trusttunnel_endpoint
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: trusttunnel_endpoint-linux-amd64
+          path: dist/trusttunnel_endpoint
+          if-no-files-found: error
