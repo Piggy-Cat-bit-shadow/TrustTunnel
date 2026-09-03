@@ -34,12 +34,14 @@ jobs:
           CXX=x86_64-linux-musl-g++ \
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=x86_64-linux-musl-gcc \
           BINDGEN_EXTRA_CLANG_ARGS="--sysroot=/opt/cross/x86_64-linux-musl" \
-          cargo build --release --target x86_64-unknown-linux-musl \
+          cargo build --release --config 'profile.release.debug = false' \
+            --target x86_64-unknown-linux-musl \
             --package trusttunnel_endpoint --bin trusttunnel_endpoint
           BIN=target/x86_64-unknown-linux-musl/release/trusttunnel_endpoint
           test -x "$BIN"
           x86_64-linux-musl-strip --strip-all "$BIN"
           if readelf -S "$BIN" | grep -qE '\.debug_|\.symtab'; then
+            readelf -S "$BIN"
             echo 'debug or symbol sections remain after stripping' >&2
             exit 1
           fi
